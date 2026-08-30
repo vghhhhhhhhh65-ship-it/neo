@@ -108,7 +108,13 @@ detect_platform() {
 
 INSTALL_DIR="${NEO_DIR:-$HOME/.local/share/neo}"
 BIN_DIR="$HOME/.local/bin"
-if [ -d /data/data/com.termux ]; then BIN_DIR="$HOME/bin"; fi
+if [ -d /data/data/com.termux ]; then
+  if [ -w "${PREFIX:-/data/data/com.termux/files/usr}/bin" ]; then
+    BIN_DIR="${PREFIX:-/data/data/com.termux/files/usr}/bin"
+  else
+    BIN_DIR="$HOME/bin"
+  fi
+fi
 STAGE="$HOME/.neo-install-stg"
 mkdir -p "$BIN_DIR" "$INSTALL_DIR" 2>/dev/null || true
 
@@ -226,7 +232,7 @@ if [ "$ON_PATH" = 0 ]; then
   printf '      Add it once:\n'
   printf '        %sexport PATH="%s:$PATH"%s\n' "$CC" "$BIN_DIR" "$R0"
   if [ -d /data/data/com.termux ]; then
-    printf '      On Termux, %s~/bin%s is already on PATH — close & reopen the app.\n' "$CC" "$R0"
+    printf '      On Termux, close & reopen the app so the PATH entry takes effect.\n'
   else
     printf '      Or (with permissions):  %ssudo ln -sf %s/neo /usr/local/bin/neo%s\n' "$CC" "$BIN_DIR" "$R0"
   fi
