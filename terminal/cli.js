@@ -5,8 +5,7 @@ const os = require('os');
 const path = require('path');
 const { exec } = require('child_process');
 const core = require('../core');
-const { runAgent, MODELS, API_BASE, MAX_CONTEXT, WORKDIR, SYSTEM_PROMPT, setMode, getMode, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, swapModels, resetModels, runCompact, modelCtxLimit } = core;
-const ocx = require('./opencode');
+const { runAgent, MODELS, API_BASE, MAX_CONTEXT, WORKDIR, SYSTEM_PROMPT, setMode, getMode, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, runCompact, modelCtxLimit } = core;
 const modelName = () => getModel();
 const { C, getWidth, getHeight, stripAnsi, clearLine, clearScreen, home, wrap, wlen, applyTheme, listThemes, themeName, themeLabel, goto } = require('./ansi');
 const cfgmod = require('../config');
@@ -711,16 +710,20 @@ function restoreScreen() {
 /* ── قائمة في صفحة كاملة: النماذج / الثيمات / الجلسات / الترحيب ── */
 async function pickPage(title, items, opts = {}) {
   if (!items || !items.length) return null;
-  const shown = items.slice(0, Math.max(1, ROWS() - 7));
+  const maxVis = Math.max(1, ROWS() - 8);
   let sel = 0;
+  let start = 0;
   const footer = opts.footer || '↑↓ اختر · Enter تنفيذ · ESC إلغاء';
   const draw = () => {
     const rows = Array(ROWS()).fill('');
     let k = 0;
     rows[k++] = C.art1 + C.bold + '  ' + title + C.n;
     rows[k++] = '';
+    if (sel < start) start = sel;
+    if (sel >= start + maxVis) start = sel - maxVis + 1;
+    const shown = items.slice(start, start + maxVis);
     shown.forEach((it, i) => {
-      const active = i === sel;
+      const active = i + start === sel;
       const label = (active ? C.bold : C.panel) + it.label + C.n + (it.desc ? C.dimt + '   ' + it.desc + C.n : '');
       const line = (active ? C.element : C.panel) + '  ' + (active ? '❯ ' : '  ') + label;
       rows[k++] = cxStr(line) + line;
@@ -733,11 +736,11 @@ async function pickPage(title, items, opts = {}) {
     if (tok === ESC || tok === 'q' || tok === 'Q') { editor.finishPicker(null); return true; }
     if (tok.length === 1 && tok >= '1' && tok <= '9') {
       const i = Number(tok) - 1;
-      if (shown[i]) { editor.finishPicker(shown[i]); return true; }
+      if (items[i]) { editor.finishPicker(items[i]); return true; }
     }
-    if (tok === ARROW_UP) { sel = (sel + shown.length - 1) % shown.length; draw(); return true; }
-    if (tok === ARROW_DOWN) { sel = (sel + 1) % shown.length; draw(); return true; }
-    if (tok === '\r' || tok === '\n') { editor.finishPicker(shown[sel]); return true; }
+    if (tok === ARROW_UP) { sel = (sel + items.length - 1) % items.length; draw(); return true; }
+    if (tok === ARROW_DOWN) { sel = sel + 1 >= items.length ? 0 : sel + 1; draw(); return true; }
+    if (tok === '\r' || tok === '\n') { editor.finishPicker(items[sel]); return true; }
     if (opts.onKey) return opts.onKey(tok) === true;
     return true;
   });
@@ -923,9 +926,7 @@ function showPromptInfo() {
 const COMMANDS = [
   { value: '/plan', label: '/plan', desc: 'وضع الخطة · أخطّط فقط + TODO · أصفر' },
   { value: '/build', label: '/build', desc: 'وضع التنفيذ · أنفّذ فوراً · TAB للتبديل' },
-  { value: '/model', label: '/model', desc: 'اختيار النموذج · Models مجاناً' },
-  { value: '/opencode', label: '/opencode', desc: 'محادثة جديدة بنماذج opencode' },
-  { value: '/neo', label: '/neo', desc: 'الرجوع لإعدادات NEO الافتراضية' },
+  { value: '/model', label: '/model', desc: 'كل النماذج المثبتة تعمل — xkiro + oc مجاناً' },
   { value: '/apikey', label: '/apikey', desc: 'إعداد مفتاح API · xkiro.com' },
   { value: '/compact', label: '/compact', desc: 'ضغط الذاكرة إلى ملخص أقسام · يعمل تلقائياً' },
   { value: '/setup', label: '/setup', desc: 'إعادة صفحة الإعداد: مفتاح / مزوّد' },
@@ -1210,7 +1211,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: '/help   مساعدة واختصارات\n/model   اختيار النموذج (الكل مجاني)\n/opencode محادثة جديدة بنماذج opencode · /neo للرجوع لـ NEO\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
+      text: '/help   مساعدة واختصارات\n/model   كل النماذج تعمل — اختر من قائمة واحدة (xkiro + oc مجاناً)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/clear') {
@@ -1223,7 +1224,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: `## تحديثات الجلسة\n\n- **model**:   ${modelName()}\n- **api**:     ${stripAnsi(getApiBase())}\n- **workdir**: ${WORKDIR}\n- **context**: ${fmt(modelCtxLimit())} tokens (ضغط تلقائي عند ~80%)\n- **os**:      ${os.platform()} ${os.release()}\n- **session**: ${SESSION_ID}\n- **theme**:   ${themeName()}\n- **mode**:    ${modeKey()}\n- **apiKey**:  ${getApiKey() || 'غير مضبوط — اكتب /apikey أو افتح /setup'}`,
+      text: `## تحديثات الجلسة\n\n- **model**:   ${modelName()}\n- **api**:     ${modelName().includes('-free') || modelName() === 'big-pickle' ? 'opencode zen (oc)' : modelName().includes('/') ? 'xkiro' : stripAnsi(getApiBase())}\n- **workdir**: ${WORKDIR}\n- **context**: ${fmt(modelCtxLimit())} tokens (ضغط تلقائي عند ~80%)\n- **os**:      ${os.platform()} ${os.release()}\n- **session**: ${SESSION_ID}\n- **theme**:   ${themeName()}\n- **mode**:    ${modeKey()}\n- **apiKey**:  ${getApiKey() || 'غير مضبوط — اكتب /apikey أو افتح /setup'}`,
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/exit' || bare === '/quit') {
@@ -1260,41 +1261,6 @@ async function handleCommand(cmd) {
     applyMode(getMode() === 'plan' ? 'build' : 'plan');
   } else if (bare === '/model') {
     await showModels();
-  } else if (bare === '/opencode' || bare === '/oc') {
-    const prof = ocx.profile();
-    if (!prof) {
-      setStatus('✕  مفتاح opencode غير موجود — سجّل الدخول في opencode أولاً', C.red);
-      drawStatusLine();
-    } else {
-      cfgmod.save({ profile: 'opencode' });
-      setApiBase(prof.apiBase);
-      setApiKey(prof.apiKey);
-      swapModels(prof.models);
-      setModel(prof.models[0] ? prof.models[0].id : getModel());
-      newSession();
-      const a = ensureAssistant();
-      a.parts.push({
-        type: 'update',
-        ok: true,
-        text: '🟦 تحوّلت إلى opencode — ' + prof.models.length + ' نموذج · ' + getApiBase().replace(/^https:\/\//, '') + '\n     اكتب /models للاختيار · /neo للرجوع لـ NEO',
-      });
-      rebuildLog(); renderConv(); drawLower();
-      setStatus('✓  OpenCode mode · model: ' + modelName(), C.green);
-    }
-  } else if (bare === '/neo') {
-    cfgmod.save({ profile: '' });
-    setApiBase(process.env.API_BASE || cfgmod.load().apiBase || 'https://api.xkiro.com/v1');
-    setApiKey(process.env.API_KEY || cfgmod.load().apiKey || '');
-    resetModels();
-    newSession();
-    const a = ensureAssistant();
-    a.parts.push({
-      type: 'update',
-      ok: true,
-      text: '🔵 رجعت إلى NEO — النماذج الافتراضية · ' + getApiBase().replace(/^https:\/\//, ''),
-    });
-    rebuildLog(); renderConv(); drawLower();
-    setStatus('✓  NEO mode · model: ' + modelName(), C.green);
   } else if (bare === '/apikey' || bare === '/key') {
     await showApiKey();
   } else if (bare === '/config' || bare === '/cfg') {
@@ -1319,15 +1285,6 @@ async function main() {
     const cf = cfgmod.load();
     if (cf.theme && listThemes().includes(cf.theme)) applyTheme(cf.theme);
     if (cf.mode === 'plan' || cf.mode === 'build') setMode(cf.mode);
-    if (cf.profile === 'opencode') {
-      const prof = ocx.profile();
-      if (prof) {
-        setApiBase(prof.apiBase);
-        setApiKey(prof.apiKey);
-        swapModels(prof.models);
-        setModel(prof.models[0] ? prof.models[0].id : getModel());
-      }
-    }
   } catch {}
   applyTheme();
   termBegin();

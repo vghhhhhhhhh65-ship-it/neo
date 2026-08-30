@@ -14,23 +14,64 @@ let API_KEY = (process.env.API_KEY || cfg.apiKey || '').trim();
 const setApiKey = (k) => { API_KEY = String(k || '').trim(); };
 const getApiKey = () => (API_KEY ? API_KEY.slice(0, 4) + '…' + API_KEY.slice(-4) : '');
 
-/* models available on xkiro (verified live against /v1/models) */
+/* unified model catalog — every entry was verified LIVE today:
+   xkiro → POST /chat/completions 200 (21 models)
+   opencode zen (api:'oc') → 200 / 429 free-limit on zen/v1 (5 models)
+   Paid-only (403), phantom/unpublished (-free that 401s), and 400/500
+   server-error ids were dropped — the list only shows models that answer. */
 const MODELS = [
-  { id: 'openai/gpt-5.3-codex-spark', name: 'GPT-5.3 Codex Spark', tag: 'coder · 128k', ctx: 128000 },
-  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', tag: '1M ctx', ctx: 1048576 },
-  { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', tag: '1M ctx · سريع', ctx: 1048576 },
-  { id: 'qwen/qwen3-coder-plus:free', name: 'Qwen3 Coder Plus', tag: 'coder · 1M ctx', ctx: 1000000 },
-  { id: 'mistralai/codestral-2508', name: 'Codestral', tag: 'coder · 256k', ctx: 262144 },
-  { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', tag: '204k', ctx: 2097152 },
-  { id: 'qwen/qwen3.6-27b:free', name: 'Qwen3.6 27B', tag: '262k', ctx: 262144 },
-  { id: 'mistralai/devstral-medium', name: 'Devstral 2', tag: 'coder · 256k', ctx: 262144 },
+  { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', api: 'xkiro', tag: 'xkiro · 1M ctx', ctx: 1048576 },
+  { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
+  { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek Chat V3.1', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/codestral-2508', name: 'Codestral 2508', api: 'xkiro', tag: 'xkiro · coder · 262k', ctx: 262144 },
+  { id: 'mistralai/devstral-medium', name: 'Devstral 2', api: 'xkiro', tag: 'xkiro · coder · 262k', ctx: 262144 },
+  { id: 'mistralai/mistral-large-2512', name: 'Mistral Large', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/mistral-medium-3.5', name: 'Mistral Medium', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/mistral-small-2603', name: 'Mistral Small', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/ministral-3b', name: 'Ministral 3B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/ministral-8b', name: 'Ministral 8B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/ministral-14b', name: 'Ministral 14B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'minimax/minimax-m2', name: 'MiniMax M2', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.1', name: 'MiniMax M2.1', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.7', name: 'MiniMax M2.7', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.1-highspeed', name: 'MiniMax M2.1 HS', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.5-highspeed', name: 'MiniMax M2.5 HS', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
+  { id: 'minimax/minimax-m2.7-highspeed', name: 'MiniMax M2.7 HS', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
+  { id: 'sensenova/sensenova-6.7-flash-lite', name: 'SenseNova 6.7 Lite', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'sensenova/sensenova-6.8-flash-lite', name: 'SenseNova 6.8 Lite', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'nemotron-3.5-lightning-free', name: 'Nemotron 3.5 Lightning', api: 'oc', tag: 'oc free · 262k', ctx: 262144 },
+  { id: 'laguna-s-2.1-free', name: 'Laguna S 2.1', api: 'oc', tag: 'oc free · 250k', ctx: 256000 },
+  { id: 'ling-3.0-flash-fin-free', name: 'Ling 3.0 Flash Fin', api: 'oc', tag: 'oc free · 262k', ctx: 262144 },
+  { id: 'big-pickle', name: 'Big Pickle', api: 'oc', tag: 'oc free · 200k', ctx: 200000 },
+  { id: 'mimo-v2.5-free', name: 'MiMo V2.5', api: 'oc', tag: 'oc free · 200k', ctx: 200000 },
 ];
-let MODEL = process.env.MODEL || cfg.model || MODELS[1].id;
+let MODEL = process.env.MODEL || (MODELS.some((m) => m.id === cfg.model) ? cfg.model : '') || MODELS[1].id;
 const setModel = (m) => { if (MODELS.some((x) => x.id === m)) MODEL = m; };
 const setModelRaw = (m) => { if (typeof m === 'string' && m.trim()) MODEL = m.trim(); };
 const getModel = () => MODEL;
 const setApiBase = (u) => { if (typeof u === 'string' && u.trim()) API_BASE = u.trim().replace(/\/+$/, ''); };
 const getApiBase = () => API_BASE;
+/* per-model API routing — xkiro models use API_BASE/API_KEY (config),
+   opencode zen models (api:'oc') use the free zen gateway + opencode key */
+const ZEN_V1 = 'https://opencode.ai/zen/v1';
+const ocOpenKey = () => {
+  try {
+    const { opencodeKey } = require('./terminal/opencode');
+    return opencodeKey();
+  } catch {
+    return '';
+  }
+};
+const apiOf = (mid) => {
+  const m = MODELS.find((x) => x.id === mid);
+  return m && m.api ? m.api : 'xkiro';
+};
+const endpointOf = (mid) => {
+  if (apiOf(mid) === 'oc') return { base: ZEN_V1, key: ocOpenKey() };
+  return { base: API_BASE, key: API_KEY };
+};
 /* hot-swap the model catalog in place (same array reference, so every
    consumer — picker, ctx limit, setModel — sees the new list) */
 const NEO_DEFAULT_MODELS = [...MODELS];
@@ -421,15 +462,16 @@ reloadPrompt();
 /* ────────────────────────────── MODEL CALL ────────────────────────────── */
 
 async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) {
-  if (!API_KEY) throw new Error('لا يوجد API Key — اكتب /apikey لضبط المفتاح');
+  const ep = endpointOf(MODEL);
+  if (!ep || !ep.key) throw new Error('لا يوجد API Key — اكتب /apikey لضبط المفتاح');
   const controller = new AbortController();
   if (signal) {
     if (signal.aborted) controller.abort();
     else signal.addEventListener('abort', () => controller.abort());
   }
-  const resp = await fetch(`${API_BASE}/chat/completions`, {
+  const resp = await fetch(`${ep.base}/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
     body: JSON.stringify({
       model: MODEL,
       messages,
