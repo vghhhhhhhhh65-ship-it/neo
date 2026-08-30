@@ -14,6 +14,25 @@ const KEY = {
 };
 const ESC = '\x1b';
 
+/* fit a string to a max width (keep the head, append …) — no ANSI inside */
+function fitRight(s, maxW) {
+  if (wlen(s) <= maxW) return s;
+  let out = '', w = 0;
+  for (const ch of s) {
+    const cw = wlen(ch);
+    if (w + cw > maxW - 1) break;
+    out += ch; w += cw;
+  }
+  return out + '…';
+}
+/* fit a string to a max width (keep the tail, prepend …) — for long prefixes */
+function fitLeft(s, maxW) {
+  if (wlen(s) <= maxW) return s;
+  let out = s, w = wlen(s);
+  while (w > maxW - 1 && out.length) { w -= wlen(out[0]); out = out.slice(1); }
+  return '…' + out;
+}
+
 /* Minimal line editor — draws a single WhatsApp-style input row (no box).
    Caller positions the cursor; draw() redraws the current line in place. */
 class LineEditor {
@@ -41,9 +60,13 @@ class LineEditor {
     this.pickerResolve = null;
     this.accent = () => C.border; // live accent (box border + prompt) color fn
     this.pasting = false;       // collecting a bracketed paste \x1b[200~ … \x1b[201~
-    this.pasteMode = false;     // showing the multi-line paste panel
+    this.pasteMode = false;     // showing the [Pasted ~N lines] box in the field
     this.pasteLines = 0;        // number of lines in the pasted block
-    this.panelMeta = null;      // fn() → 'Build · model' line under the panel
+    this.pasteStart = 0;        // raw start of the pasted block inside buf
+    this.pasteEnd = 0;          // raw end of the pasted block inside buf
+    this.pasteHeadW = 0;        // display width of the box before typed text (caret anchor)
+    this.escLast = 0;           // last ESC press time (double-ESC clears the field)
+    this.onEscCleared = null;   // double-ESC hook (field was cleared)
   }
 
   setPrompt(p) { this.prompt = p; }
@@ -69,9 +92,11 @@ class LineEditor {
     const acc = (this.accent && this.accent()) || C.border;
     const room = Math.max(1, W - 8);
     const raw = this.buf || '';
-    /* multi-line paste is drawn as a floating panel by draw() — never here */
-    if (this.pasteMode && raw.includes('\n')) {
-      return '';
+    /* inline [Pasted ~N lines] box: the pasted text itself lives at the END of
+       the buffer; the box shows its line count + the first line of content.
+       Any text typed after the paste is shown beside the box. */
+    if (this.pasteMode && this.pasteLines > 0) {
+      return this.pasteRow(raw, W, acc, room);
     }
     const clipped = raw.length > room;
     const shown = clipped ? raw.slice(0, room - 1) + '…' : raw;
@@ -87,58 +112,57 @@ class LineEditor {
       + acc + '│' + C.n + ' ';
   }
 
+  /* render the field when a paste block is active: a small rectangular box
+     "[Pasted ~N lines] · first-line…" representing the pasted lines, with any
+     bonus text the user typed after the paste shown beside the box */
+  pasteRow(raw, W, acc, room) {
+    const tot = this.pasteLines;
+    const start = this.pasteStart;
+    const end = this.pasteEnd || 0;
+    const pasted = raw.slice(start, end);
+    const first = (pasted.split('\n').find((l) => l.trim()) || '').slice(0, 40);
+    /* the box itself */
+    const box = C.blue + C.bold + '[' + C.n + C.border + C.bold + 'Pasted ~' + C.n
+      + C.text + tot + C.n + C.border + C.bold + ' lines' + C.n + C.blue + C.bold + ']' + C.n;
+    const wBox = wlen('[Pasted ~' + tot + ' lines]');
+    const roomLeft = Math.max(1, room - wBox - 4);
+    /* preview of the first pasted line + anything typed after the box */
+    const prev = first ? C.n + C.dimt + ' · ' + C.n + C.text + fitRight(first, Math.max(4, roomLeft - 2)) : '';
+    const typed = raw.slice(end);
+    const extra = typed ? C.n + ' ' + C.text + fitRight(typed, roomLeft) : '';
+    const body = box + prev + extra;
+    this.pasteHeadW = wlen(stripAnsi(box + prev)); // display width before typed text (caret anchor)
+    this.pasteBodyW = wlen(stripAnsi(body));       // display width of the whole body
+    const wB = this.pasteBodyW;
+    const pad = Math.max(0, W - 8 - wB);
+    return acc + '│' + C.n + '  '
+      + acc + C.bold + '› ' + C.n
+      + body
+      + ' '.repeat(pad) + ' '
+      + acc + '│' + C.n + ' ';
+  }
+
   draw() {
-    const raw = this.buf || '';
-    if (this.pasteMode && raw.includes('\n')) return this.drawPastePanel();
     let head = '';
     if (this.row) head = `\x1b[${this.row};1H`;
     else if (this.initGoto) { head = this.initGoto; this.initGoto = null; }
     else head = '\r';
     const line = this.rowText();
     process.stdout.write(head + C.element + '\x1b[2K' + line + C.reset);
-    const caret = 5 + this.pos; // '│  › ' → border col1, › col4-5, text starts col6
-    const d = Math.max(0, stripAnsi(line).length - caret);
-    if (this.pos < this.buf.length && d > 0) process.stdout.write(CSI + d + 'D');
-  }
-
-  /* floating paste panel (opencode style) drawn over the input box:
-        ┃
-        ┃  [Pasted ~28 lines]
-        ┃
-        ┃  Build auto · Big Pickle OpenCode Zen
-        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-     rows used: the input box itself (F_B1 … F_EDGE) = row … row+4 */
-  drawPastePanel() {
-    const W = this.barW || this.maxWidth + 6;
-    const acc = (this.accent && this.accent()) || C.border;
-    const tot = this.buf.split('\n').length;
-    const rows = this.row - 1;    // F_B1 … F_EDGE = 5 rows
-    const railCol = 2;            // left rail at column 3
-    const rail = ' '.repeat(railCol) + acc + '┃' + C.n;
-    const rowInner = (s) => s + ' '.repeat(Math.max(0, W - 2 - wlen(stripAnsi(s))));
-    let out = '';
-    /* row 1: just the rail (blank line) */
-    out += `\x1b[${rows};1H` + C.element + '\x1b[2K' + rowInner(rail) + C.reset;
-    /* row 2: [Pasted ~N lines] */
-    const label = C.blue + C.bold + '[Pasted ' + C.n + C.dimt + '~' + C.n + tot + C.n + C.blue + C.bold + ' lines]' + C.n;
-    out += `\x1b[${rows + 1};1H` + C.element + '\x1b[2K' + rowInner(rail + '  ' + label) + C.reset;
-    /* row 3: blank rail */
-    out += `\x1b[${rows + 2};1H` + C.element + '\x1b[2K' + rowInner(rail) + C.reset;
-    /* row 4: mode · model line */
-    const meta = this.panelMeta ? this.panelMeta() : '';
-    let metaLine = '';
-    if (meta) {
-      const room = Math.max(4, W - 6);
-      const fit = wlen(meta) <= room ? meta : Array.from(meta).slice(0, Math.max(0, room - 1)).join('') + '…';
-      metaLine = rail + '  ' + C.dimt + fit + C.n;
+    /* caret column: normal = 5 + raw pos; in paste mode the box compresses the
+       pasted block (raw [pasteStart..pasteEnd]) into one visual unit, so the
+       caret sits after the box and any typed text beside it */
+    let caret;
+    if (this.pasteMode && this.pos > 0) {
+      if (this.pos <= this.pasteEnd) caret = 5 + this.pasteHeadW;          // inside/at the box → end of box
+      else caret = 5 + this.pasteHeadW + 1 + (this.pos - this.pasteEnd);   // typed text after the box
     } else {
-      metaLine = rail;
+      caret = 5 + this.pos;
     }
-    out += `\x1b[${rows + 3};1H` + C.element + '\x1b[2K' + rowInner(metaLine) + C.reset;
-    /* row 5: bottom border ╹▀▀▀▀▀… full width */
-    const bot = ' '.repeat(railCol) + acc + '╹' + C.n + C.dimt + '▀'.repeat(Math.max(0, W - railCol - 2)) + C.n;
-    out += `\x1b[${rows + 4};1H` + C.element + '\x1b[2K' + bot + C.reset;
-    process.stdout.write(out);
+    const lineLen = stripAnsi(line).length;
+    caret = Math.min(caret, Math.max(1, lineLen - 1)); // never run off the right rail
+    const d = Math.max(0, lineLen - caret);
+    if (this.pos < this.buf.length && d > 0) process.stdout.write(CSI + d + 'D');
   }
 
   stop() {
@@ -147,14 +171,21 @@ class LineEditor {
     this.done = true;
   }
 
-  /* insert a multi-line paste at once (single redraw → no freeze) and switch
-     the field to the compact "📄 لصق N سطر" badge until the user edits it */
+  /* insert a multi-line paste at once (single redraw → no freeze):
+     the pasted block is appended at the END of the buffer, right where the
+     caret sits, then the field renders it as a compact rectangular box
+     "[Pasted ~N lines] · first-line…". Text typed afterwards appends beside
+     the box (raw position after pasteEnd). One backspace on the box deletes
+     the whole box like a single character. */
   insertPaste(str) {
     const norm = String(str).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    this.buf = this.buf.slice(0, this.pos) + norm + this.buf.slice(this.pos);
-    this.pos += norm.length;
+    const start = this.buf.length;
+    this.buf = this.buf + norm;
+    this.pos = this.buf.length;
     this.pasteMode = true;
     this.pasteLines = norm.split('\n').length;
+    this.pasteStart = start;
+    this.pasteEnd = start + norm.length;
     this.draw();
     this.tick();
   }
@@ -162,6 +193,23 @@ class LineEditor {
   clearPasteMode() {
     this.pasteMode = false;
     this.pasteLines = 0;
+    this.pasteStart = 0;
+    this.pasteEnd = 0;
+    this.pasteHeadW = 0;
+  }
+
+  /* clear the whole field (double-ESC or deleting the paste box) */
+  clearField() {
+    this.buf = '';
+    this.pos = 0;
+    this.pasteMode = false;
+    this.pasteLines = 0;
+    this.pasteStart = 0;
+    this.pasteEnd = 0;
+    this.pasteHeadW = 0;
+    this.draw();
+    this.tick();
+    if (this.onEscCleared) this.onEscCleared();
   }
 
   readLine() {
@@ -322,15 +370,64 @@ class LineEditor {
     }
   }
 
-  /* returns false → stop all further input processing */
-  keySeq(seq) {
-    if (seq === ESC) {
-      if (this.onEscPress) this.onEscPress();
+  /* backspace: if the caret is at/inside the paste box, delete the WHOLE box
+     as a single unit ("مربع مثل حرف"); otherwise delete one typed char
+     (keeping the box when deleting text typed BESIDE it) */
+  backspace() {
+    if (this.pasteMode && this.pos <= this.pasteEnd && this.pos > this.pasteStart && this.pasteEnd > this.pasteStart) {
+      this.buf = this.buf.slice(0, this.pasteStart) + this.buf.slice(this.pasteEnd);
+      this.pos = this.pasteStart;
+      this.clearPasteMode();
+      this.draw(); this.tick();
       return true;
     }
+    if (this.pos > 0) {
+      this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos);
+      this.pos--;
+      if (!this.pasteMode) this.clearPasteMode();
+      this.draw(); this.tick();
+    }
+    return true;
+  }
+
+  /* forward delete: inside the paste box → delete the whole box; after the
+     box → delete a typed char beside it (keeping the box) */
+  delChar() {
+    if (this.pasteMode && this.pos < this.pasteEnd && this.pos >= this.pasteStart && this.pasteEnd > this.pasteStart) {
+      this.buf = this.buf.slice(0, this.pasteStart) + this.buf.slice(this.pasteEnd);
+      this.pos = this.pasteStart;
+      this.clearPasteMode();
+      this.draw(); this.tick();
+      return true;
+    }
+    if (this.pos < this.buf.length) {
+      this.buf = this.buf.slice(0, this.pos) + this.buf.slice(this.pos + 1);
+      if (!this.pasteMode) this.clearPasteMode();
+      this.draw(); this.tick();
+    }
+    return true;
+  }
+
+  /* single ESC: track timing; second ESC shortly after with a full field
+     clears the whole field (feature: "ESC مرتين يحذف كامل الحقل") */
+  pressEsc() {
+    const now = Date.now();
+    if (this.buf && now - this.escLast < 500) {
+      this.escLast = 0;
+      this.clearField();
+      return true;
+    }
+    this.escLast = now;
+    if (this.onEscPress) this.onEscPress();
+    return true;
+  }
+
+  /* returns false → stop all further input processing */
+  keySeq(seq) {
+    if (seq === ESC) return this.pressEsc();
     if (seq === '\x1b\x1b') { // fast double-ESC merged into one chunk
-      if (this.onEscPress) this.onEscPress();
-      if (this.onEscPress) this.onEscPress();
+      if (this.buf) this.clearField();
+      else if (this.onEscPress) this.onEscPress();
       return true;
     }
     if (seq === KEY.UP) { if (this.onNavDir) { if (this.onNavDir(-1)) return true; } this.moveHist(-1); return true; }
@@ -341,14 +438,8 @@ class LineEditor {
     if (seq === KEY.END) { this.pos = this.buf.length; this.draw(); return true; }
     if (seq === KEY.PGUP) { if (this.onScrollPage) this.onScrollPage(1); return true; }
     if (seq === KEY.PGDN) { if (this.onScrollPage) this.onScrollPage(-1); return true; }
-    if (seq === KEY.DEL) {
-      if (this.pos < this.buf.length) { this.buf = this.buf.slice(0, this.pos) + this.buf.slice(this.pos + 1); this.clearPasteMode(); this.draw(); this.tick(); }
-      return true;
-    }
-    if (seq === KEY.BACK || seq === '\x7f') {
-      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.clearPasteMode(); this.draw(); this.tick(); }
-      return true;
-    }
+    if (seq === KEY.DEL) return this.delChar();
+    if (seq === KEY.BACK || seq === '\x7f') return this.backspace();
     return true;
   }
 
@@ -388,15 +479,16 @@ class LineEditor {
     if (ch === KEY.CTRL_A) { this.pos = 0; this.draw(); return true; }
     if (ch === KEY.CTRL_E) { this.pos = this.buf.length; this.draw(); return true; }
     if (ch === KEY.BACK) {
-      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.clearPasteMode(); this.draw(); this.tick(); }
-      return true;
+      return this.backspace();
     }
     if (ch === '\r' || ch === '\n') {
       if (this.onPaletteEnter && this.onPaletteEnter()) return false;
       this.submit();
       return false;
     }
-    this.clearPasteMode();
+    /* typing while the paste box is shown: new text goes BESIDE the box
+       (the box and its raw region stay untouched) */
+    if (!(this.pasteMode && this.pos >= this.pasteEnd)) this.clearPasteMode();
     this.buf = this.buf.slice(0, this.pos) + ch + this.buf.slice(this.pos);
     this.pos += ch.length;
     this.draw();

@@ -1367,11 +1367,6 @@ async function main() {
   });
 
   editor.onChange = (buf) => {
-    if (!editor.pasteMode && editor._wasPanel) {
-      editor._wasPanel = false;
-      paint();
-    }
-    editor._wasPanel = !!editor.pasteMode;
     const t = buf.trim();
     if (t.startsWith('/')) { showPalette(t.slice(1)); }
     else if (palette) closePalette();
@@ -1386,7 +1381,6 @@ async function main() {
   editor.onModeToggle = toggleMode;
   editor.onScrollPage = (dir) => scrollPage(dir);
   editor.onWheel = (dir) => scrollBy(dir);
-  editor.panelMeta = () => modeKey() + (modeIsPlan() ? '' : ' auto') + ' · ' + modelName();
 
   return new Promise((resolve) => {
     (async function loop() {
