@@ -48,17 +48,16 @@ function renderMd(src, width) {
     })
     .join('\n');
 
-  // code fences → panel block with a thin top rule (no heavy box)
+  // code fences → panel block with a thin rule + a language cap (no heavy box)
   const fenceRe = /```(\w*)\n([\s\S]*?)(```|$)/g;
   const out = plain.replace(fenceRe, (_m, lang, code) => {
     const W = Math.max(10, width - 2);
     const body = code.trimEnd();
     const wrapped = body.split('\n').flatMap((l) => (stripAnsi(l).length > W ? wrap(l, W) : [l]));
-    const header = (lang ? C.dimt + lang : C.dimt + 'code') + ' ';
-    const top = C.gray + '┄ '.repeat(2) + header + C.reset + C.border + ' '.repeat(0) + C.reset;
-    const rule = C.gray + '─'.repeat(Math.min(width, 46)) + C.reset;
+    const bar = C.gray + '─'.repeat(Math.max(8, Math.min(width - 2, 46))) + C.reset;
+    const cap = lang ? C.border + '─ ' + C.pink + lang + C.reset + '\n' : '';
     const mid = wrapped.map((l) => C.element + '  ' + C.text + l + C.reset).join('\n');
-    return rule + '\n' + (lang ? C.dimt + ' ' + lang + C.reset + '\n' : '') + mid + '\n' + C.gray + '─'.repeat(Math.min(width, 46)) + C.reset;
+    return bar + '\n' + cap + mid + '\n' + bar;
   });
 
   return out;

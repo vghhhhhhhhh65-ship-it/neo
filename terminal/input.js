@@ -1,6 +1,6 @@
 'use strict';
 
-const { C, stripAnsi } = require('./ansi');
+const { C, stripAnsi, wlen } = require('./ansi');
 
 const CSI = '\x1b[';
 
@@ -55,21 +55,28 @@ class LineEditor {
     this.row = row;
   }
 
-  /* ── input line inside the opencode-style box (left ┃ comes from footer):
-        ┃  ❯ text …  [padded with element bg to the right edge] */
+  /* ── input line inside the enclosed opencode-style box — full width:
+        │  ❯ text …  pad …  │
+        left rail col1 · prompt col4-5 · text from col6 · right rail col W-1
+        the whole row is one continuous element-bg strip; caret math in
+        draw() assumes the ASCII rails below. ── */
   rowText() {
-    const W = Math.max(8, this.barW || (this.maxWidth + 6));
+    const W = Math.max(12, this.barW || (this.maxWidth + 6));
     const acc = (this.accent && this.accent()) || C.border;
-    const prefix = '  ' + acc + '┃' + C.n + '  '; // visible 5
-    const headLen = stripAnsi('❯ ').length;
-    const room = Math.max(1, W - 5 - headLen);
-    const raw = this.buf.slice(0, room);
-    const clipped = this.buf.length > raw.length;
-    const head = acc + C.bold + '❯ ' + C.n;
-    const tail = raw ? C.text + raw + (clipped ? acc + '…' + C.n : C.n)
-      : C.dimt + this.placeholder + C.n;
-    const padN = Math.max(0, W - 5 - headLen - (raw ? raw.length : this.placeholder.length));
-    return prefix + head + tail + ' '.repeat(padN);
+    const room = Math.max(1, W - 8);
+    const raw = this.buf || '';
+    const clipped = raw.length > room;
+    const shown = clipped ? raw.slice(0, room - 1) + '…' : raw;
+    const ph = this.placeholder;
+    const shownPh = wlen(ph) > room - 3 ? ph.slice(0, Math.max(1, room - 4)) + '…' : ph;
+    const wT = wlen(shown || shownPh);
+    const pad = Math.max(0, W - 8 - wT);
+    const body = (this.buf ? C.text + shown + C.n : C.dimt + shownPh + C.n);
+    return acc + '│' + C.n + '  '
+      + acc + C.bold + '› ' + C.n
+      + body
+      + ' '.repeat(pad) + ' '
+      + acc + '│' + C.n + ' ';
   }
 
   draw() {
@@ -79,8 +86,9 @@ class LineEditor {
     else head = '\r';
     const line = this.rowText();
     process.stdout.write(head + C.element + '\x1b[2K' + line + C.reset);
-    const caret = 7 + this.pos; // '  ┃  ❯ ' → caret index within the row
-    if (this.pos < this.buf.length) process.stdout.write(CSI + (stripAnsi(line).length - caret) + 'D');
+    const caret = 5 + this.pos; // '│  › ' → border col1, › col4-5, text starts col6
+    const d = Math.max(0, stripAnsi(line).length - caret);
+    if (this.pos < this.buf.length && d > 0) process.stdout.write(CSI + d + 'D');
   }
 
   stop() {

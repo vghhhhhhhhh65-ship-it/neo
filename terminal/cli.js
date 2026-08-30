@@ -44,15 +44,15 @@ const modeKey = () => (modeIsPlan() ? 'Plan' : 'Build');
 
 /* ── virtual conversation — opencode-style footer ────────────────
    rows 1..convRows : scrollable conversation
-   then the pinned footer block (opencode zen look):
+   then the pinned footer block (enclosed rounded input box):
      ROWS-7  ▣  Build · <model> · <elapsed>      (session header)
      ROWS-6  (blank)
-     ROWS-5  ┃                                  (box top rail)
-     ROWS-4  ┃  ❯ input…            ← EDITOR centered in the box
-     ROWS-3  ┃                                  (box bottom rail)
-     ROWS-2  ┃  Build · <model>                  (meta row inside box)
-     ROWS-1  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀...▀   (box bottom edge)
-     ROWS    /home  <usage>  ctrl+p commands     (footer line)        */
+     ROWS-5  ╭───────────────╮                  (box top · accent corners)
+     ROWS-4  │  › input…     │   ← EDITOR owns both rails (caret exact)
+     ROWS-3  │───────────────│                  (thin divider)
+     ROWS-2  │ Build · model … │    (meta row · right hint chip)
+     ROWS-1  ╰───────────────╯                  (box bottom rounded)
+     ROWS    CWD … <usage>  ctrl+p commands     (footer line)             */
 const convRows = () => Math.max(3, ROWS() - 8);
 const F_HDR = () => ROWS() - 7;
 const F_BLANK = () => ROWS() - 6;
@@ -164,13 +164,13 @@ function rebuildLog() {
     }
     if (m.role === 'user') {
       const W = COL() - 8;
-      LOG.push(...bubbleRows(USER_ICON, 'You', C.blue, C.userBg, wrap(m.text, W).map((l) => C.text + l)));
+      LOG.push(...bubbleRows(USER_ICON, 'You', C.blue, C.userBg, wrap(m.text, W).map((l) => C.text + l), { right: true }));
       LOG.push('');
       continue;
     }
     for (const p of m.parts) {
       if (p.type === 'text') {
-        LOG.push(...bubbleRows(AI_ICON, 'NEO', C.art1, C.panel, bubbleLines(p.text)));
+        LOG.push(...bubbleRows(AI_ICON, 'NEO', C.art1, C.panel, bubbleLines(p.text), { rail: C.art2 }));
         LOG.push('');
       } else if (p.type === 'thinking') {
         const first = truncateFmt(String(p.text).split('\n')[0], Math.max(16, COL() - IND.length - 4));
@@ -247,23 +247,54 @@ function footerLine() {
   return truncateFmt(L + ' '.repeat(gap) + R, CW);
 }
 
-/* ── fixed input + footer rows (always at bottom, never scroll) ── */
+/* ── fixed input + footer rows (always at bottom, never scroll) ──
+   an enclosed rounded box with accent rails at col1 and col COL-1:
+     ╭─  Build ·   model  · 0:04 ────────────╮   with scroll hint ……
+     ────────────────────────────────────────
+     │  ❯ Ask anything…                       │
+     ────────────────────────────────────────
+     │  Build · model          ⏎ send · TAB⇄  │
+     ╰──────────────────────────────────────╯
+   the editor row itself owns both rails so the caret math stays exact. */
+function fillRow(c, bg) { return padLine(c, bg); }
+
 function drawLower() {
-  const ac = modeColor;
-  const rail = '  ' + ac() + '┃' + C.n;                    // box left wall — same column everywhere
+  const ac = modeColor();
+  const W = COL();
+  const M = Math.max(1, W - 3);              // inner run between the corners
   const scrollHint = scrollOff > 0 ? '   ' + C.gray + '↥ ' + scrollOff + ' أقدم' + C.n : '';
-  const hdr = '▣  ' + ac() + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n + C.dimt + ' · ' + elapsedFmt() + C.n + scrollHint;
-  const meta = rail + '  ' + ac() + C.bold + modeKey() + C.n + C.dimt + ' · ' + modelName() + C.n;
-  process.stdout.write(goto(F_HDR(), 1) + padLine(truncateFmt(hdr, COL() - 1)));
-  process.stdout.write(goto(F_BLANK(), 1) + padLine(''));
-  process.stdout.write(goto(F_B1(), 1) + padLine(rail, C.element));
-  process.stdout.write(goto(F_B3(), 1) + padLine(rail, C.element));
-  process.stdout.write(goto(F_META(), 1) + padLine(truncateFmt(meta, COL() - 1), C.element));
-  process.stdout.write(goto(F_EDGE(), 1) + padLine('', C.element));
-  process.stdout.write(goto(F_FOOT(), 1) + padLine(footerLine()));
-  editor.barW = COL();
+  const hdr = '▣  ' + ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n + C.dimt + ' · ' + elapsedFmt() + C.n + scrollHint;
+
+  /* rounded corners + dim run: ╭ ring in accent, ─ run in dimt */
+  const topRow = ac + '╭' + C.n + C.dimt + '─'.repeat(M) + C.n + ac + '╮' + C.n;
+  const divRow = ac + '│' + C.n + C.dimt + '─'.repeat(M) + C.n + ac + '│' + C.n;
+  const botRow = ac + '╰' + C.n + C.dimt + '─'.repeat(M) + C.n + ac + '╯' + C.n;
+
+  /* meta row: |  mode · model …… chip │ */
+  const metaL = ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n;
+  const chip = C.dimt + '⏎ send · TAB⇄' + C.n;
+  const iw = wlen(stripAnsi(metaL));
+  const cw = wlen(stripAnsi(chip));
+  const pad = W - 5 - iw - cw;
+  let metaRow;
+  if (pad >= 1) {
+    metaRow = '│ ' + metaL + ' '.repeat(pad) + chip + ' │';
+  } else {
+    const room = Math.max(4, W - 5);
+    const m = truncateFmt(metaL, room);
+    metaRow = '│ ' + m + ' '.repeat(Math.max(0, W - 5 - wlen(stripAnsi(m)))) + ' │';
+  }
+
+  process.stdout.write(goto(F_HDR(), 1) + fillRow(truncateFmt(hdr, W)));
+  process.stdout.write(goto(F_BLANK(), 1) + fillRow(''));
+  process.stdout.write(goto(F_B1(), 1) + fillRow(topRow, C.element));
+  process.stdout.write(goto(F_B3(), 1) + fillRow(divRow, C.element));
+  process.stdout.write(goto(F_META(), 1) + fillRow(metaRow, C.element));
+  process.stdout.write(goto(F_EDGE(), 1) + fillRow(botRow, C.element));
+  process.stdout.write(goto(F_FOOT(), 1) + fillRow(footerLine()));
+  editor.barW = W;
   editor.setRow(F_EDIT());
-  editor.accent = ac;
+  editor.accent = () => ac;
   editor.draw();
 }
 
@@ -343,26 +374,37 @@ function diffBox(d) {
   return rows;
 }
 
-/* ── message bubbles — soft borders, breathing padding, calm look ── */
+/* ── message bubbles — rounded, breathing padding, calm look.
+   assistant: left docked, gradient cap (title in art1, run in art2)
+   user:      right docked (messenger style), soft blue walls      ── */
 const USER_ICON = '◉';
 const AI_ICON = '✦';
 
-/* inner content lines already colored, no INDIM/BG yet */
-function bubbleRows(icon, title, borderColor, fillBg, lines) {
+/* inner content lines already colored, no INDENT/BG yet.
+   opts.right → right-aligned bubble; opts.rail → color for the dash run */
+function bubbleRows(icon, title, borderColor, fillBg, lines, opts = {}) {
   const clean = lines.map((l) => String(l));
   if (!clean.length || clean.every((l) => wlen(stripAnsi(l)) === 0)) return [];
   const maxL = clean.reduce((a, l) => Math.max(a, wlen(stripAnsi(l))), 0);
-  const W = Math.min(COL() - 4, Math.max(20, maxL + 3));
+  const W = Math.min(COL() - 6, Math.max(18, maxL + 3));
+  const rail = opts.rail || borderColor || C.dimt;
   const head = C.dimt + icon + ' ' + C.n + C.bold + (borderColor || C.text) + title + C.n;
   const hl = wlen(stripAnsi(head));
   const rows = [];
-  rows.push(IND + C.dimt + '╭─ ' + head + '  ' + '─'.repeat(Math.max(1, W - 6 - hl)) + '╮' + C.n);
+  rows.push(C.dimt + '╭─ ' + C.n + head + rail + '  ' + '─'.repeat(Math.max(1, W - 6 - hl)) + C.n + C.dimt + '╮' + C.n);
+  const innerW = W - 4;
   for (const l of clean) {
     const t = wlen(stripAnsi(l));
-    rows.push(IND + C.dimt + '│' + C.n + fillBg + '  ' + l + ' '.repeat(Math.max(0, W - 4 - t)) + C.reset + C.dimt + '│' + C.n);
+    for (const ln of (t > innerW ? wrap(l, innerW) : [l])) {
+      const tn = wlen(stripAnsi(ln));
+      rows.push(C.dimt + '│' + C.n + fillBg + '  ' + ln + ' '.repeat(Math.max(0, innerW - tn)) + C.reset + C.dimt + '│' + C.n);
+    }
   }
-  rows.push(IND + C.dimt + '╰' + '─'.repeat(W - 2) + '╯' + C.n);
-  return rows;
+  rows.push(C.dimt + '╰' + rail + '─'.repeat(Math.max(2, W - 2)) + C.n + C.dimt + '╯' + C.n);
+  if (opts.right) {
+    return rows.map((r) => ' '.repeat(Math.max(0, COL() - 1 - wlen(stripAnsi(r)))) + r);
+  }
+  return rows.map((r) => IND + r);
 }
 
 /* wrap markdown text into plain (colored) lines for the bubble body */
@@ -805,13 +847,17 @@ function drawPalette() {
   const s0 = Math.max(0, palette.sel - (rows - 1));
   const shown = all.slice(s0, s0 + rows);
   const over = all.length - s0 - shown.length;
+  const ac = modeColor();
   let s = '';
   const headTxt = ' Commands — الأوامر' + (over > 0 ? C.dimt + '   +' + over + ' أكثر ↑↓' : '');
-  const head = C.bold + headTxt + C.n;
-  s += goto(1, 1) + '\x1b[2K' + C.panel + head + ' '.repeat(Math.max(0, COL() - 2 - wlen(stripAnsi(head)))) + '   ' + C.dimt + '↑↓ ⏎ esc' + C.n + C.reset;
+  const L = ac + '╭' + C.n + C.panel + C.bold + headTxt + C.n;
+  const R = C.dimt + '  ↑↓ ⏎ esc  ' + C.n + ac + '╮' + C.n;
+  const lw = wlen(stripAnsi(L)), rw = wlen(stripAnsi(R));
+  s += goto(1, 1) + '\x1b[2K' + C.panel + L + ' '.repeat(Math.max(0, COL() - 1 - lw - rw)) + R + C.reset;
   if (!shown.length) {
     const body = C.dimt + 'لا توجد نتائج — امسح النص لمشاهدة كل الأوامر' + C.n;
-    s += goto(2, 1) + '\x1b[2K' + C.panel + ' ' + body + ' '.repeat(Math.max(0, COL() - 2 - wlen(stripAnsi(body)))) + C.reset;
+    const mid = ' ' + body + ' '.repeat(Math.max(0, COL() - 5 - wlen(stripAnsi(body)))) + ' ';
+    s += goto(2, 1) + '\x1b[2K' + C.panel + ac + '│' + C.n + mid + ac + '│' + C.n + C.reset;
   } else {
     for (let i = 0; i < shown.length; i++) {
       const it = shown[i];
@@ -821,8 +867,12 @@ function drawPalette() {
       const row = mark + (active ? C.text : C.dimt) + val + C.n + C.dimt + '   ' + it.desc + C.n;
       const body = truncateFmt(row, Math.max(4, COL() - 4));
       const bgc = active ? C.element : C.panel;
-      s += goto(2 + i, 1) + '\x1b[2K' + bgc + ' ' + body + ' '.repeat(Math.max(0, COL() - 2 - wlen(stripAnsi(body)))) + C.reset;
+      const mid = ' ' + body + ' '.repeat(Math.max(0, COL() - 4 - wlen(stripAnsi(body)))) + ' ';
+      s += goto(2 + i, 1) + '\x1b[2K' + bgc + ac + '│' + C.n + mid + ac + '│' + C.n + C.reset;
     }
+  }
+  if (2 + shown.length <= rows) {
+    s += goto(2 + shown.length, 1) + '\x1b[2K' + C.panel + ac + '╰' + C.n + C.dimt + '─'.repeat(Math.max(1, COL() - 3)) + C.n + ac + '╯' + C.n + ' ' + C.reset;
   }
   process.stdout.write(s);
 }

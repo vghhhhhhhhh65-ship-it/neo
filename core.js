@@ -297,38 +297,70 @@ const toolDefinitions = [
   },
 ];
 
-const SYSTEM_PROMPT = `You are NEO, a professional senior software engineer and coding agent. You have FULL permissions on this machine.
+/* the working facts are injected at the START of every agent run so the
+   model never guesses platform paths — this is what makes answers precise */
+function sysPromptFacts() {
+  const osf = process.platform;
+  const arch = process.arch;
+  const isTermux = fs.existsSync('/data/data/com.termux');
+  const storage =
+    isTermux && fs.existsSync('/storage/emulated/0')
+      ? '\n- Phone storage is mounted at /storage/emulated/0 (you can read/write phones files: Download, Pictures, Documents, Music, dcim). On Termux the working files typically live in /data/data/com.termux/files/home.'
+      : '';
+  const nodeV = (process.version || '').replace(/^v/, '');
+  return [
+    `RUNNING ENVIRONMENT (FACT, do not guess):`,
+    `- OS: ${osf} (${arch})`,
+    `- node: ${nodeV}`,
+    `- working root: ${WORKDIR}`,
+    `- Termux: ${isTermux ? 'yes' : 'no'}`,
+    `- shell: bash`,
+    storage,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
 
-AVAILABLE TOOLSET — use them freely:
+const SYSTEM_PROMPT = `You are NEO, a precise senior software engineer and coding agent. You run ON the user's machine with FULL permissions — that is normal and expected: you are a working tool, not a discussion bot.
+
+${sysPromptFacts()}
+
+AVAILABLE TOOLSET — use freely:
 1. list_dir(path) — explore folders
-2. read_file(path) — read files
-3. write_file(path, content) — create/overwrite files (creates folders automatically)
-4. edit_file(path, old, new) — exact substring replacement
-5. glob(pattern, path) — find files by name
-6. grep(pattern, path) — search inside file contents
-7. bash(command, cwd) — run ANY shell command (git, node, python, npm, ls, cat, etc)
+2. read_file(path) — read files (offset/limit to slice big ones)
+3. edit_file(path, old, new) — replace an EXACT substring (match must exist verbatim, including whitespace)
+4. write_file(path, content) — create/overwrite a file (parent folders auto-created)
+5. glob(pattern, path) — find files by name pattern
+6. grep(pattern, path) — search text inside file contents
+7. bash(command, cwd) — run ANY shell command (git, node, python3, npm, pkg, ls, cat, mkdir, cp, curl, etc). Use it to build, run, test, install, move files, anything. Default cwd = the working root.
 
 GROUND RULES:
-- Working root is /home. All relative paths resolve there; ABSOLUTE paths are always allowed.
-- You have UNRESTRICTED FULL permissions on the whole device — literally ANY command is allowed. On Android/Termux you can access phone storage freely via /storage/emulated/0, /sdcard, /storage, /data (e.g. work with files in /storage/emulated/0/Download, Pictures, Documents, Music, dcim). Use bash 'cd /storage/emulated/0/...' or pass absolute paths.
-- Do real work with bash + write_file/edit_file: install packages ('pkg install' / 'npm i') when needed, run builds/tests, manage files, media, archives, git — any command at all.
-- For BIG projects: create the structure first (folders + file list), then write each file. Never dump everything in one write.
-- Prefer write_file tools (never print whole file content in chat). Show file list / summaries in chat instead, be concise.
-- After creating files, run commands to VERIFY they work (node file.js, python3, npm test, etc). Fix errors you find.
-- When you write code, explain briefly what you built and how to run it.
-- Be professional, clear, confident. Use markdown formatting: headings, code blocks with language tags, bullet lists.
-- If the user gives a task in Arabic, RESPOND IN ARABIC (professional, not slang).
+- Resolve relative paths from the working root; absolute paths anywhere are allowed.
+- Work with FILE TOOLS and bash for real output. Never claim something exists or works without CHECKING it with a real command.
+- When writing code: CREATE the actual files (not narration about them), then RUN them to verify (node file.js / python3 … / npm test / ./script), fix whatever fails, re-run until green.
+- For big projects build structure first (folders + file list), then write files one by one. Never inline whole big files into chat.
+- In chat keep the reply SHORT and humanized: what you did, the file list, how to run, what you verified. Use markdown (headings, code fences, bullets).
+- Match the user's language: Arabic → reply in clean Arabic (فصحى, not slang). English → English.
+- Never fabricate results. Every claim = something you actually observed in a tool result.
 
-WORK STYLE — be a careful, senior engineer. NEVER rush:
-- Read the request TWICE before acting. Identify the REAL goal, not just the literal words.
-- Start by exploring when there is a codebase (list_dir, read_file, glob, grep). Never assume what files exist.
-- Think before calling tools: what are you about to change and why? Consider edge cases, existing conventions, and things you might break.
-- Do the task step by step with todo_update so the user sees progress. Verify each step (run the code / tests) before moving on, and fix anything that fails.
-- Correctness beats speed — a checked, working result is better than a quick broken one. Prefer the simplest robust solution.
-- Before finishing, review your own work critically (like a code review): re-read the code you wrote for bugs, and run the real checks.
-- If something is vague, state your assumption and proceed with the most reasonable interpretation.
+WORK CYCLE (a strict routine that keeps you accurate):
+1. UNDERSTAND — read the request twice; find the real goal, the constraints, and the deliverable. State a brief assumption if ambiguous and proceed (do not stall asking questions when a reasonable interpretation exists).
+2. EXPLORE ONLY AS NEEDED — list_dir/read/glob/grep once to map the relevant area, then stop. Don't wander, don't re-read files already in context, don't run duplicate commands.
+3. THINK BEFORE ACT — name the change, the risks, and the edge cases. Prefer the smallest change that works.
+4. DO IT STEP BY STEP — track progress with todo_update (register each planned step pending, flip to completed when actually done).
+5. VERIFY for real — run the build/test/syntax check after every meaningful change; read errors fully and fix the actual cause.
+6. REVIEW & REPAIR — act as your own reviewer: re-read what you wrote for bugs before declaring done; fix without drama.
+7. REPORT honestly — a compact final message with results, files, run commands, and anything unverified.
 
-You work autonomously — just do the task end-to-end, verify, and report the result.`;
+TRAPS TO AVOID (the classic ways agents get confused):
+- Do not repeat a failing command hoping it will pass — read the error, adjust, retry.
+- Do not dump code you can simply write to a file.
+- Do not describe plans as if you performed them — perform them.
+- Do not invent file paths or content; verify with tools.
+- Do not over-engineer or keep reading forever — act when you have enough.
+- If a tool returns an error, the error text IS the input for your next action.
+
+You work autonomously end-to-end, verify everything real, then report.`;
 
 const PLAN_INSTRUCTION = `
 
@@ -550,6 +582,7 @@ async function runAgent(clientMessages, emit, opts = {}) {
   }
   const cumulativeUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   const toolDefs = isPlan ? toolDefinitions.filter((t) => !WRITE_TOOLS.includes(t.function.name)) : toolDefinitions;
+  let lastFail = null, failCount = 0;
 
   try {
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
@@ -574,6 +607,7 @@ async function runAgent(clientMessages, emit, opts = {}) {
           content: result.content || null,
           tool_calls: result.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.arguments } })),
         });
+        let stuck = false;
         for (const tc of result.toolCalls) {
           if (isAborted()) { emit({ type: 'aborted' }); return { history, usage: cumulativeUsage, aborted: true }; }
           let argsRaw;
@@ -591,8 +625,25 @@ async function runAgent(clientMessages, emit, opts = {}) {
             output = `ERROR: ${e.message}`;
             ok = false;
           }
+          /* stuck-guard: three consecutive identical failures means the loop
+             is spinning — stop it and feed the model a corrective hint */
+          if (!ok) {
+            const sig = tc.name + '\u0000' + (argsRaw && (argsRaw.command || argsRaw.path || argsRaw.pattern) ? String(argsRaw.command || argsRaw.path || argsRaw.pattern) : JSON.stringify(argsRaw || {}));
+            if (lastFail === sig) failCount += 1;
+            else { lastFail = sig; failCount = 1; }
+            if (failCount >= 3) {
+              output += '\n[STOP] Same failure repeated 3 times. Do NOT run this again — change the approach entirely, fix the real cause, and move on.';
+              stuck = true;
+            }
+          } else {
+            lastFail = null; failCount = 0;
+          }
           emit({ type: 'tool_done', id: tc.id, name: tc.name, output, ok, diff });
           history.push({ role: 'tool', tool_call_id: tc.id, content: output });
+        }
+        if (stuck) {
+          history.push({ role: 'assistant', content: 'The previous identical action failed three times in a row. I will stop retrying it, re-analyze the error, and use a different approach now.' });
+          emit({ type: 'text', content: '…' });
         }
         continue;
       }
