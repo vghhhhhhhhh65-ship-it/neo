@@ -108,6 +108,20 @@ let TODOS = [];
 const getTodos = () => TODOS;
 const WRITE_TOOLS = ['write_file', 'edit_file', 'bash'];
 
+/* interactive question to the user: ask_question blocks the agent loop,
+   the CLI shows a picker page, and answerQuestion() resolves the answer */
+const pendingQuestions = new Map();
+let questionSeq = 0;
+let activeEmit = () => {};
+function answerQuestion(id, value) {
+  const r = pendingQuestions.get(id);
+  if (r) { pendingQuestions.delete(id); r(value); }
+}
+const cancelAllQuestions = () => {
+  for (const [, r] of pendingQuestions) r('…');
+  pendingQuestions.clear();
+};
+
 /* ────────────────────────────── TOOLS ────────────────────────────── */
 
 const tools = {
@@ -188,6 +202,31 @@ const tools = {
     });
     const out = (stdout + (stderr ? '\n[STDERR]\n' + stderr : '')).trim();
     return out.slice(0, 6000) || '(command ran with no output)';
+  },
+
+  /* ask the user for a decision — blocks the loop until the CLI replies.
+     options: array of { label, value } or plain strings. */
+  async ask_question(args) {
+    if (activeEmit === (() => {})) throw new Error('ask_question is only available inside a run');
+    const question = String(args.question || args.q || '').slice(0, 240);
+    const options = (Array.isArray(args.options) ? args.options : [])
+      .map((o) => {
+        if (o && typeof o === 'object') return { label: String(o.label ?? '').slice(0, 80) || String(o), value: o.value !== undefined ? String(o.value) : String(o) };
+        return { label: String(o).slice(0, 80), value: String(o) };
+      })
+      .filter((o) => o.label && o.label.trim())
+      .slice(0, 12);
+    if (!question.trim()) return 'ERROR: ask_question needs a "question".';
+    if (options.length < 2) return 'ERROR: ask_question needs 2+ "options".';
+
+    const id = ++questionSeq;
+    activeEmit({ type: 'question', id, question: question.trim(), options });
+    if (process.env.NEO_TUI_TEST === '1') console.error('__NEOQ_ASKED__ ' + JSON.stringify({ id, q: question.trim(), n: options.length }));
+    const answer = await new Promise((resolve) => pendingQuestions.set(id, resolve));
+    pendingQuestions.delete(id);
+    if (process.env.NEO_TUI_TEST === '1') console.error('__NEOQ_ANSWERED__ ' + JSON.stringify({ id, answer }));
+    if (!answer || answer === '…') return "The user dismissed the question — proceed on your own judgment.";
+    return `User chose: "${answer}"`;
   },
 };
 
@@ -352,6 +391,21 @@ const toolDefinitions = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_question',
+      description: 'Ask the user a short question with interactive answer options, shown as a picker on their screen. Use it ONLY when you are genuinely blocked or the request is ambiguous and a single wrong guess would waste a lot of effort. Keeps working while you wait — the chosen answer comes back to you and you continue. If the user dismisses it, proceed on your own judgment.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The short question to show the user' },
+          options: { type: 'array', items: { type: 'string' }, description: '2-6 answer options the user can pick, in the user\'s language' },
+        },
+        required: ['question', 'options'],
+      },
+    },
+  },
 ];
 
 /* the working facts are injected at the START of every agent run so the
@@ -427,7 +481,7 @@ GROUND RULES:
 - Never fabricate results. Every claim = something you actually observed in a tool result.
 
 WORK CYCLE (a strict routine that keeps you accurate):
-1. UNDERSTAND — read the request twice; find the real goal, the constraints, and the deliverable. State a brief assumption if ambiguous and proceed (do not stall asking questions when a reasonable interpretation exists).
+1. UNDERSTAND — read the request twice; find the real goal, the constraints, and the deliverable. If a wrong guess would waste a lot of effort and the point is genuinely ambiguous, call ask_question with 2-6 options — never guess blindly; proceed without asking when a reasonable interpretation exists.
 2. EXPLORE ONLY AS NEEDED — list_dir/read/glob/grep once to map the relevant area, then stop. Don't wander, don't re-read files already in context, don't run duplicate commands.
 3. THINK BEFORE ACT — name the change, the risks, and the edge cases. Prefer the smallest change that works.
 4. DO IT STEP BY STEP — track progress with todo_update (register each planned step pending, flip to completed when actually done).
@@ -693,6 +747,7 @@ async function runCompact(system, msgs, opts = {}) {
 }
 
 async function runAgent(clientMessages, emit, opts = {}) {
+  activeEmit = emit;
   const isAborted = opts.isAborted || (() => false);
   const signal = opts.signal || null;
   const isPlan = CURRENT_MODE === 'plan';
@@ -789,6 +844,9 @@ async function runAgent(clientMessages, emit, opts = {}) {
           }
           emit({ type: 'tool_done', id: tc.id, name: tc.name, output, ok, diff });
           history.push({ role: 'tool', tool_call_id: tc.id, content: output });
+          if (process.env.NEO_TUI_TEST === '1' && tc.name !== 'ask_question') {
+            console.error('__NEOQ_NEXT_TOOL__ ' + JSON.stringify({ name: tc.name }));
+          }
         }
         if (stuck) {
           history.push({ role: 'assistant', content: 'The previous identical action failed three times in a row. I will stop retrying it, re-analyze the error, and use a different approach now.' });
@@ -813,4 +871,4 @@ async function runAgent(clientMessages, emit, opts = {}) {
   }
 }
 
-module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles, swapModels, resetModels, NEO_DEFAULT_MODELS };
+module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles, swapModels, resetModels, NEO_DEFAULT_MODELS, answerQuestion, cancelAllQuestions, isQuestionPending: () => pendingQuestions.size > 0 };

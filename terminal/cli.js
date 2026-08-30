@@ -748,6 +748,34 @@ async function pickPage(title, items, opts = {}) {
   return picked ? picked.value : null;
 }
 
+/* ── interactive user question — the agent called ask_question(); show a
+   picker page (title = the question) and resolve the pending answer so the
+   agent can keep going, exactly like opencode's question dialog. ESC or a
+   bare Enter on a free-text option = dismiss → agent proceeds on its own. ── */
+async function showQuestionPage(ev) {
+  stopInterruptWatcher();
+  const items = ev.options.map((o) => ({ value: o.value, label: o.label, desc: '' }));
+  items.push({ value: '__custom__', label: '✍️ اكتب إجابة بنفسك…', desc: 'رأي حر — أكتبه' });
+  const title = truncateFmt('❓ ' + ev.question, Math.max(10, COL() - 6));
+  const picked = await pickPage(title, items, {
+    footer: '↑↓ اختر · Enter إرسال · ESC أكمل بلا إجابة',
+  });
+  let answer = null;
+  if (picked === '__custom__') {
+    const form = await pageForm({
+      title: 'إجابتك الحرة',
+      subtitle: ev.question,
+      fields: [{ key: 'txt', label: 'الرد', placeholder: 'اكتب هنا…' }],
+      footer: 'Enter حفظ · ESC إلغاء',
+    });
+    answer = form && form.txt ? String(form.txt).trim() : null;
+  } else if (picked) {
+    answer = String(picked);
+  }
+  try { core.answerQuestion(ev.id, answer || ''); } catch {}
+  if (BUSY) installInterruptWatcher();
+}
+
 /* ── نموذج في صفحة كاملة: حقول إدخال متعددة (مخفية أو ظاهرة) ── */
 async function pageForm(opts) {
   const { title, subtitle, fields, footer } = opts;
@@ -1097,6 +1125,8 @@ function applyAgentEvent(ev) {
   } else if (ev.type === 'usage') {
     tokensUsage = { prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0, total: ev.total_tokens || 0 };
     drawStatusLine();
+  } else if (ev.type === 'question') {
+    showQuestionPage(ev).catch(() => {});
   } else if (ev.type === 'compacted') {
     const a = ensureAssistant();
     a.parts.push({ type: 'note', text: '🧠 ذاكرة مضغوطة تلقائياً — ' + ev.dropped + ' رسالة ← ملخص' + (ev.kept ? ' · بقي ' + ev.kept + ' حديثة كما هي' : '') });
