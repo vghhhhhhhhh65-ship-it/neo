@@ -6,6 +6,23 @@ const fs = require('fs');
 
 const args = process.argv.slice(2);
 
+/* ── auto-update: for "run" and "web" modes we update before starting;
+   the interactive TUI does its own update dance inside cli.js ── */
+async function maybeAutoUpdate() {
+  try {
+    const { checkUpdate, applyUpdate, reexec } = require('../update');
+    const info = await checkUpdate();
+    if (!info) return false;
+    await applyUpdate(info);
+    process.stdout.write(`\n  ⬆ NEO updated  v${info.current} → v${info.version}  — restarting…\n`);
+    reexec(args);
+    return true;
+  } catch (e) {
+    try { process.stdout.write('\n  (NEO auto-update skipped: ' + e.message + ')\n'); } catch {}
+    return false;
+  }
+}
+
 function printHelp() {
   console.log(`Neo Agent — AI coding agent (DeepSeek V4 Pro, 1M context)
 
@@ -81,9 +98,9 @@ for (let i = 0; i < args.length; i++) {
 if (mode === 'run') {
   const prompt = position.join(' ').trim() || '';
   if (!prompt) { console.error('Usage: neo run "your task"'); process.exit(1); }
-  runOnce(prompt, opts);
+  maybeAutoUpdate().then((did) => { if (!did) runOnce(prompt, opts); });
 } else if (mode === 'web') {
-  startWeb(opts);
+  maybeAutoUpdate().then((did) => { if (!did) startWeb(opts); });
 } else {
   const tui = require('../terminal/cli');
   tui.main();

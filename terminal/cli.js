@@ -11,6 +11,8 @@ const { C, getWidth, getHeight, stripAnsi, clearLine, clearScreen, home, wrap, w
 const cfgmod = require('../config');
 const { renderMd } = require('./md');
 const { LineEditor } = require('./input');
+const updater = require('../update');
+const appVersion = () => { try { return require('../package.json').version; } catch { return ''; } };
 
 const SPINNERS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const ESC = '\x1b';
@@ -177,6 +179,8 @@ function rebuildLog() {
         LOG.push(IND + C.dimt + '· ' + first + C.n);
       } else if (p.type === 'note') {
         LOG.push(IND + C.dimt + p.text + C.n);
+      } else if (p.type === 'update') {
+        LOG.push(IND + (p.ok === false ? C.red : p.ok ? C.green : C.dimt) + p.text + C.n);
       } else if (p.type === 'compact') {
         const lines = String(p.text).split('\n');
         for (const l of lines) {
@@ -522,6 +526,68 @@ function fmt(n) {
   return String(n);
 }
 
+/* ── auto-update flow — silent network check, automatic apply + restart ──
+   launch:  if newer release exists → show it, download, swap, re-exec the
+            terminal so the user lands immediately in the new version.
+   manual : /update  → check now + apply + restart (or "already freshest").
+   timer  : while running, find newer release → gentle notice only.        */
+async function doUpdate(opts = {}) {
+  const { manual = false } = opts;
+  const info = await updater.checkUpdate().catch(() => null);
+  if (!info) {
+    if (manual) setStatus('أنت على أحدث إصدار v' + appVersion() + ' ✓', C.green);
+    return false;
+  }
+  const busy = BUSY || editor.buf !== '';
+  if (busy) {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'update', text: `⬆ متوفر تحديث NEO v${info.latest} — سيتم تطبيقه تلقائياً عند إعادة التشغيل. للترقية فوراً اكتب: /update`, ok: true });
+    rebuildLog(); renderConv(); drawLower();
+    return false;
+  }
+  {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'update', text: '⬆ نسخة جديدة متاحة: v' + info.latest + ' (أنت على v' + info.current + ') — تحميل التحديث…', ok: true });
+    rebuildLog(); renderConv();
+  }
+  setStatus('⬆ تحديث NEO إلى v' + info.latest + ' …', C.green);
+  try {
+    const res = await updater.applyUpdate(info);
+    {
+      const a = ensureAssistant();
+      a.parts.push({ type: 'update', text: '✔ تم التحديث إلى v' + res.version + ' — إعادة تشغيل تلقائي…', ok: true });
+      rebuildLog(); renderConv();
+    }
+    setStatus('✔ تم التحديث → v' + res.version + ' · إعادة تشغيل', C.green);
+    if (editor.buf !== '' || BUSY) {
+      const a2 = ensureAssistant();
+      a2.parts.push({ type: 'update', text: '✔ التحديث جاهز — سيُفعّل تلقائياً عند إعادة تشغيل neo.', ok: true });
+      rebuildLog(); renderConv(); drawLower();
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    saveCurrent();
+    try { process.stdin.setRawMode(false); } catch {}
+    updater.reexec(process.argv.slice(2));
+    return true;
+  } catch (e) {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'update', text: '✕ فشل التحديث: ' + e.message, ok: false });
+    rebuildLog(); renderConv();
+    setStatus('✕ فشل التحديث: ' + e.message, C.red);
+    return false;
+  }
+}
+
+function periodicUpdateCheck() {
+  updater.checkUpdate().then((info) => {
+    if (!info || BUSY) return;
+    const a = ensureAssistant();
+    a.parts.push({ type: 'update', text: '📦 توفر إصدار جديد: v' + info.latest + ' — اكتب /update للتحديث الآن (أو سيتم تلقائياً عند إعادة التشغيل).', ok: true });
+    rebuildLog(); renderConv(); drawLower();
+  }).catch(() => {});
+}
+
 /* ── sessions — persistent chat history (like opencode) ───────── */
 const NEO_DIR = path.join(os.homedir(), '.neo');
 const SESSIONS_FILE = path.join(NEO_DIR, 'sessions.json');
@@ -821,6 +887,7 @@ const COMMANDS = [
   { value: '/clear', label: '/clear', desc: 'إعادة ضبط المحادثة' },
   { value: '/config', label: '/config', desc: 'إعدادات config.json / config.toml' },
   { value: '/info', label: '/info', desc: 'تفاصيل الجلسة' },
+  { value: '/update', label: '/update', desc: 'التحقق من التحديث · الترقية التلقائية' },
   { value: '/help', label: '/help', desc: 'مساعدة واختصارات' },
   { value: '/web', label: '/web', desc: 'تشغيل neo web' },
   { value: '/exit', label: '/exit', desc: 'إنهاء البرنامج' },
@@ -1081,7 +1148,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: '/help   مساعدة واختصارات\n/model   اختيار النموذج (الكل مجاني)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
+      text: '/help   مساعدة واختصارات\n/model   اختيار النموذج (الكل مجاني)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/clear') {
@@ -1111,6 +1178,8 @@ async function handleCommand(cmd) {
     await manualCompact();
   } else if (bare === '/setup') {
     await welcomeGate();
+  } else if (bare === '/update') {
+    await doUpdate({ manual: true });
   } else if (bare === '/theme') {
     if (rest) {
       if (listThemes().includes(rest)) {
@@ -1164,6 +1233,17 @@ async function main() {
   }
   paint();
   drawSplash();
+
+  /* tell the user when this run was just upgraded (set by the updater) */
+  if (process.env.NEO_UPDATED_FROM) {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'update', text: '✔ تم الترقية تلقائياً v' + process.env.NEO_UPDATED_FROM + ' → v' + appVersion() + ' ✨ أحدث إصدار', ok: true });
+    rebuildLog(); renderConv();
+  }
+
+  /* auto-update check (silent, non-blocking) + periodic fresh-check */
+  doUpdate();
+  setInterval(periodicUpdateCheck, 45 * 60 * 1000).unref();
 
   process.on('SIGINT', () => {
     bye();

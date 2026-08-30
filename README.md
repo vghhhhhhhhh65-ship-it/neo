@@ -48,7 +48,8 @@ In the TUI you get:
 - Live orange `⠇ Thinking…` spinner while the model reasons, separate **think** box
 - Live tool cards (📖 read · ✍️ write · ⚡ bash · ✓ done) and inline diffs
 - Clean replies — no stray `*`/`#` markdown junk
-- `/` command palette (`/help  /clear  /info  /setup  /apikey  /theme  /exit`)
+- `/` command palette (`/help  /clear  /info  /setup  /apikey  /theme  /update  /exit`)
+- **Auto-update**: NEO checks for a newer release at launch (and every 45 min). When one exists it downloads it, applies it automatically, and restarts itself into the new version — your chat session, key and config in `~/.neo` are kept. `/update` forces an instant check + upgrade. Run `NEO_DISABLE_UPDATE=1 neo` to turn auto-update off.
 - **In-app scrolling** — PgUp/PgDn and the mouse wheel scroll the history; the log is never wiped because the app runs on its own (alt) screen
 - Smart context window: long sessions are auto-compacted into a summary note
 - Themes (dracula default) — `/theme`
@@ -89,6 +90,7 @@ bin/neo.js        CLI entry (neo | neo run | neo web)
 core.js           agent loop + tools + model API (shared)
 config.js         ~/.neo/config handling (json / jsonc / toml)
 server.js         web server
+update.js         auto-updater (check GitHub, swap, self-restart)
 terminal/         TUI engine (cli, ansi palettes + wide-width, input/keys+mouse, markdown)
 public/           web frontend (light theme, token counters, think box)
 install.sh        the one-line installer
