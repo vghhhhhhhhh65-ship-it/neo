@@ -40,6 +40,9 @@ class LineEditor {
     this.pickerHandler = null;  // modal picker (sessions / theme) key routing
     this.pickerResolve = null;
     this.accent = () => C.border; // live accent (box border + prompt) color fn
+    this.pasting = false;       // collecting a bracketed paste \x1b[200~ … \x1b[201~
+    this.pasteMode = false;     // showing the multi-line paste badge
+    this.pasteLines = 0;        // number of lines in the pasted block
   }
 
   setPrompt(p) { this.prompt = p; }
@@ -65,6 +68,19 @@ class LineEditor {
     const acc = (this.accent && this.accent()) || C.border;
     const room = Math.max(1, W - 8);
     const raw = this.buf || '';
+    /* multi-line paste → collapse into a single compact badge with line count */
+    if (this.pasteMode && raw.includes('\n')) {
+      const tot = raw.split('\n').length;
+      const first = raw.split('\n')[0].slice(0, Math.max(1, room - 22));
+      const badge = C.blue + C.bold + '📄 لصق ' + C.n + C.text + first + C.n + C.dimt + ' …' + '  (' + tot + ' سطر)' + C.n;
+      const wB = wlen(stripAnsi(badge));
+      const pad = Math.max(0, W - 8 - wB);
+      return acc + '│' + C.n + '  '
+        + acc + C.bold + '› ' + C.n
+        + badge
+        + ' '.repeat(pad) + ' '
+        + acc + '│' + C.n + ' ';
+    }
     const clipped = raw.length > room;
     const shown = clipped ? raw.slice(0, room - 1) + '…' : raw;
     const ph = this.placeholder;
@@ -97,6 +113,23 @@ class LineEditor {
     this.done = true;
   }
 
+  /* insert a multi-line paste at once (single redraw → no freeze) and switch
+     the field to the compact "📄 لصق N سطر" badge until the user edits it */
+  insertPaste(str) {
+    const norm = String(str).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    this.buf = this.buf.slice(0, this.pos) + norm + this.buf.slice(this.pos);
+    this.pos += norm.length;
+    this.pasteMode = true;
+    this.pasteLines = norm.split('\n').length;
+    this.draw();
+    this.tick();
+  }
+
+  clearPasteMode() {
+    this.pasteMode = false;
+    this.pasteLines = 0;
+  }
+
   readLine() {
     return new Promise((resolve) => {
       if (!process.stdin.isTTY) {
@@ -109,6 +142,8 @@ class LineEditor {
       this.done = false;
       this.buf = '';
       this.pos = 0;
+      this.pasting = false;
+      this.clearPasteMode();
       this.resolveFn = resolve;
       process.stdin.setRawMode(true);
       process.stdin.resume();
@@ -122,6 +157,7 @@ class LineEditor {
     if (line.trim()) this.history.push(line);
     this.histIdx = this.history.length;
     this.histDraft = '';
+    this.clearPasteMode();
     this.stop();
     process.stdin.removeAllListeners('data');
     this.buf = '';
@@ -164,6 +200,36 @@ class LineEditor {
   handleData(d) {
     if (this.done) return;
     const s = d.toString('utf8');
+    /* ── bracketed paste \x1b[200~ … \x1b[201~ ── collect it fully, then
+           insert literally (newlines kept, no accidental submit) ── */
+    if (this.pasting) {
+      const end = s.indexOf('\x1b[201~');
+      if (end === -1) { this.insertPaste(s); return; }
+      this.insertPaste(s.slice(0, end));
+      this.pasting = false;
+      const rest = s.slice(end + 6);
+      if (rest) this.handleData(Buffer.from(rest));
+      return;
+    }
+    const bStart = s.indexOf('\x1b[200~');
+    if (bStart !== -1) {
+      const before = s.slice(0, bStart);
+      if (before) this.handleData(Buffer.from(before));
+      this.pasting = true;
+      const tail = s.slice(bStart + 6);
+      if (tail) this.handleData(Buffer.from(tail));
+      return;
+    }
+    /* ── non-bracketed multi-line paste: a burst containing a newline (and
+           more than a bare Enter). Insert it whole instead of submitting at
+           the first \n — this is what used to freeze the field. ── */
+    const isSoleEnter = /^[\r\n]+$/.test(s);
+    const hasNL = /[\r\n]/.test(s);
+    const isBigSingle = s.length > 400;
+    if (!isSoleEnter && (hasNL || isBigSingle) && !this.pickerHandler && s.length > 1) {
+      this.insertPaste(s);
+      return;
+    }
     for (let i = 0; i < s.length; i++) {
       const ch = s[i];
       /* mouse reports → wheel scrolling / clicks (never reach the editor) */
@@ -242,11 +308,11 @@ class LineEditor {
     if (seq === KEY.PGUP) { if (this.onScrollPage) this.onScrollPage(1); return true; }
     if (seq === KEY.PGDN) { if (this.onScrollPage) this.onScrollPage(-1); return true; }
     if (seq === KEY.DEL) {
-      if (this.pos < this.buf.length) { this.buf = this.buf.slice(0, this.pos) + this.buf.slice(this.pos + 1); this.draw(); this.tick(); }
+      if (this.pos < this.buf.length) { this.buf = this.buf.slice(0, this.pos) + this.buf.slice(this.pos + 1); this.clearPasteMode(); this.draw(); this.tick(); }
       return true;
     }
     if (seq === KEY.BACK || seq === '\x7f') {
-      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.draw(); this.tick(); }
+      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.clearPasteMode(); this.draw(); this.tick(); }
       return true;
     }
     return true;
@@ -273,21 +339,22 @@ class LineEditor {
       if (!this.buf) { this.stop(); process.stdin.removeAllListeners('data'); this.resolveFn(null); return false; }
       return true;
     }
-    if (ch === KEY.CTRL_U) { this.buf = ''; this.pos = 0; this.draw(); this.tick(); return true; }
-    if (ch === KEY.CTRL_K) { this.buf = this.buf.slice(0, this.pos); this.draw(); this.tick(); return true; }
+    if (ch === KEY.CTRL_U) { this.buf = ''; this.pos = 0; this.clearPasteMode(); this.draw(); this.tick(); return true; }
+    if (ch === KEY.CTRL_K) { this.buf = this.buf.slice(0, this.pos); this.clearPasteMode(); this.draw(); this.tick(); return true; }
     if (ch === KEY.CTRL_W) {
       const before = this.buf.slice(0, this.pos);
       const m = before.match(/^(.*?)\S+\s*$/);
       const cut = m ? m[1].length : 0;
       this.buf = before.slice(0, cut) + this.buf.slice(this.pos);
       this.pos = cut;
+      this.clearPasteMode();
       this.draw(); this.tick();
       return true;
     }
     if (ch === KEY.CTRL_A) { this.pos = 0; this.draw(); return true; }
     if (ch === KEY.CTRL_E) { this.pos = this.buf.length; this.draw(); return true; }
     if (ch === KEY.BACK) {
-      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.draw(); this.tick(); }
+      if (this.pos > 0) { this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos); this.pos--; this.clearPasteMode(); this.draw(); this.tick(); }
       return true;
     }
     if (ch === '\r' || ch === '\n') {
@@ -295,6 +362,7 @@ class LineEditor {
       this.submit();
       return false;
     }
+    this.clearPasteMode();
     this.buf = this.buf.slice(0, this.pos) + ch + this.buf.slice(this.pos);
     this.pos += ch.length;
     this.draw();

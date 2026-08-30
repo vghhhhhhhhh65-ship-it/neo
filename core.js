@@ -308,14 +308,18 @@ function sysPromptFacts() {
       ? '\n- Phone storage is mounted at /storage/emulated/0 (you can read/write phones files: Download, Pictures, Documents, Music, dcim). On Termux the working files typically live in /data/data/com.termux/files/home.'
       : '';
   const nodeV = (process.version || '').replace(/^v/, '');
+  let promptNote = '';
+  try { promptNote = `\n- Your system/topic prompt file (you may edit it to change how you behave): ${promptPath()}`; } catch {}
   return [
     `RUNNING ENVIRONMENT (FACT, do not guess):`,
     `- OS: ${osf} (${arch})`,
     `- node: ${nodeV}`,
     `- working root: ${WORKDIR}`,
+    `- user home: ${os.homedir()}`,
     `- Termux: ${isTermux ? 'yes' : 'no'}`,
     `- shell: bash`,
     storage,
+    promptNote,
   ]
     .filter(Boolean)
     .join('\n');
