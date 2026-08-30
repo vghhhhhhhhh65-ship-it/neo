@@ -41,8 +41,9 @@ class LineEditor {
     this.pickerResolve = null;
     this.accent = () => C.border; // live accent (box border + prompt) color fn
     this.pasting = false;       // collecting a bracketed paste \x1b[200~ … \x1b[201~
-    this.pasteMode = false;     // showing the multi-line paste badge
+    this.pasteMode = false;     // showing the multi-line paste panel
     this.pasteLines = 0;        // number of lines in the pasted block
+    this.panelMeta = null;      // fn() → 'Build · model' line under the panel
   }
 
   setPrompt(p) { this.prompt = p; }
@@ -68,18 +69,9 @@ class LineEditor {
     const acc = (this.accent && this.accent()) || C.border;
     const room = Math.max(1, W - 8);
     const raw = this.buf || '';
-    /* multi-line paste → collapse into a single compact badge with line count */
+    /* multi-line paste is drawn as a floating panel by draw() — never here */
     if (this.pasteMode && raw.includes('\n')) {
-      const tot = raw.split('\n').length;
-      const first = raw.split('\n')[0].slice(0, Math.max(1, room - 22));
-      const badge = C.blue + C.bold + '📄 لصق ' + C.n + C.text + first + C.n + C.dimt + ' …' + '  (' + tot + ' سطر)' + C.n;
-      const wB = wlen(stripAnsi(badge));
-      const pad = Math.max(0, W - 8 - wB);
-      return acc + '│' + C.n + '  '
-        + acc + C.bold + '› ' + C.n
-        + badge
-        + ' '.repeat(pad) + ' '
-        + acc + '│' + C.n + ' ';
+      return '';
     }
     const clipped = raw.length > room;
     const shown = clipped ? raw.slice(0, room - 1) + '…' : raw;
@@ -96,6 +88,8 @@ class LineEditor {
   }
 
   draw() {
+    const raw = this.buf || '';
+    if (this.pasteMode && raw.includes('\n')) return this.drawPastePanel();
     let head = '';
     if (this.row) head = `\x1b[${this.row};1H`;
     else if (this.initGoto) { head = this.initGoto; this.initGoto = null; }
@@ -105,6 +99,46 @@ class LineEditor {
     const caret = 5 + this.pos; // '│  › ' → border col1, › col4-5, text starts col6
     const d = Math.max(0, stripAnsi(line).length - caret);
     if (this.pos < this.buf.length && d > 0) process.stdout.write(CSI + d + 'D');
+  }
+
+  /* floating paste panel (opencode style) drawn over the input box:
+        ┃
+        ┃  [Pasted ~28 lines]
+        ┃
+        ┃  Build auto · Big Pickle OpenCode Zen
+        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+     rows used: the input box itself (F_B1 … F_EDGE) = row … row+4 */
+  drawPastePanel() {
+    const W = this.barW || this.maxWidth + 6;
+    const acc = (this.accent && this.accent()) || C.border;
+    const tot = this.buf.split('\n').length;
+    const rows = this.row - 1;    // F_B1 … F_EDGE = 5 rows
+    const railCol = 2;            // left rail at column 3
+    const rail = ' '.repeat(railCol) + acc + '┃' + C.n;
+    const rowInner = (s) => s + ' '.repeat(Math.max(0, W - 2 - wlen(stripAnsi(s))));
+    let out = '';
+    /* row 1: just the rail (blank line) */
+    out += `\x1b[${rows};1H` + C.element + '\x1b[2K' + rowInner(rail) + C.reset;
+    /* row 2: [Pasted ~N lines] */
+    const label = C.blue + C.bold + '[Pasted ' + C.n + C.dimt + '~' + C.n + tot + C.n + C.blue + C.bold + ' lines]' + C.n;
+    out += `\x1b[${rows + 1};1H` + C.element + '\x1b[2K' + rowInner(rail + '  ' + label) + C.reset;
+    /* row 3: blank rail */
+    out += `\x1b[${rows + 2};1H` + C.element + '\x1b[2K' + rowInner(rail) + C.reset;
+    /* row 4: mode · model line */
+    const meta = this.panelMeta ? this.panelMeta() : '';
+    let metaLine = '';
+    if (meta) {
+      const room = Math.max(4, W - 6);
+      const fit = wlen(meta) <= room ? meta : Array.from(meta).slice(0, Math.max(0, room - 1)).join('') + '…';
+      metaLine = rail + '  ' + C.dimt + fit + C.n;
+    } else {
+      metaLine = rail;
+    }
+    out += `\x1b[${rows + 3};1H` + C.element + '\x1b[2K' + rowInner(metaLine) + C.reset;
+    /* row 5: bottom border ╹▀▀▀▀▀… full width */
+    const bot = ' '.repeat(railCol) + acc + '╹' + C.n + C.dimt + '▀'.repeat(Math.max(0, W - railCol - 2)) + C.n;
+    out += `\x1b[${rows + 4};1H` + C.element + '\x1b[2K' + bot + C.reset;
+    process.stdout.write(out);
   }
 
   stop() {
