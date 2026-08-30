@@ -3,10 +3,12 @@
 const { C, getWidth, wrap, stripAnsi, wlen } = require('./ansi');
 
 function inlines(t) {
-  /* note: C.n (default-fg) is used instead of C.reset so the theme's
+  /* note: C.n (explicit theme fg) is used instead of C.reset so the theme's
      background is never dropped mid-row — otherwise the terminal's own
-     base color flashes through inside the reply bubbles. */
-  return t
+     base color flashes through inside the reply bubbles. C.text prefixes
+     plain paragraphs so text is never left on the terminal's default fg
+     (readable on light themes even if the terminal ignores OSC 10). */
+  return C.text + t
     .replace(/`([^`\n]+)`/g, (m, x) => C.pink + x + C.n)
     .replace(/\*\*([^*\n]+)\*\*/g, C.bold + '$1' + C.n)
     .replace(/__([^_\n]+)__/g, C.bold + '$1' + C.n)

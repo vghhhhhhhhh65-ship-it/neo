@@ -308,6 +308,8 @@ function drawStatusLine() { drawLower(); }
 /* restore the terminal and print a clean goodbye (only used at real exit) */
 function bye() {
   dropStatusTimer();
+  /* restore the terminal's own default fg/bg (we may have changed them via OSC 10/11) */
+  process.stdout.write('\x1b]110\x1b\\\x1b]111\x1b\\');
   process.stdout.write('\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?1049l' + clearScreen() + home() + C.text + 'Bye 👋' + C.reset + '\n');
 }
 /* enter the alternative screen — the app redraws in place, the main buffer

@@ -196,7 +196,7 @@ const PALETTES = {
 let activeTheme = 'dracula';
 
 function buildC(p) {
-  const colors = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', italic: '\x1b[3m', underline: '\x1b[4m', n: '\x1b[39m' };
+  const colors = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', italic: '\x1b[3m', underline: '\x1b[4m' };
   for (const k of ['text', 'dimt', 'gray', 'blue', 'green', 'red', 'amber', 'orange', 'purple', 'pink', 'cyan', 'art1', 'art2', 'art3']) colors[k] = f(...p[k]);
   colors.bg = b(...p.bg);
   colors.panel = b(...p.panel);
@@ -210,6 +210,11 @@ function buildC(p) {
   colors.accent = colors.blue;
   colors.accent2 = colors.purple;
   colors.h2 = colors.blue;
+  /* n = "back to normal body text": clear bold/dim/italic/underline and force
+     an EXPLICIT theme text color. Keeps the current background (no row gaps)
+     and never relies on the terminal's default fg — so light themes stay
+     readable even on terminals that ignore OSC 10. */
+  colors.n = '\x1b[22;23;24;25m' + f(...p.text);
   colors.hexbg = p.hexbg;
   colors.hexfg = p.hexfg;
   return colors;

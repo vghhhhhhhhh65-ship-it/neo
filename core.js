@@ -408,10 +408,33 @@ async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) 
 
   const result = { content: '', reasoning: '', toolCalls: [], usage: null };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  /* watchdog: a fetch stream that stops sending bytes (mobile / flaky
+     network) would otherwise hang the agent forever with the spinner —
+     abort after STREAM_STALL_MS of total silence. */
+  const STREAM_STALL_MS = Number(process.env.NEO_STREAM_TIMEOUT || 60000);
+  let lastChunk = Date.now();
+  let stallReason = null;
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastChunk > STREAM_STALL_MS) {
+      clearInterval(stallTimer);
+      stallReason = 'انتهت مهلة الاستجابة — الشبكة توقفت، أعد المحاولة (اضغط ESC للإيقاف)';
+      controller.abort();
+    }
+  }, 2500);
+
+  try {
+    while (true) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        if (stallReason) throw new Error(stallReason);
+        throw e;
+      }
+      const { done, value } = chunk;
+      if (done) break;
+      lastChunk = Date.now();
+      buffer += decoder.decode(value, { stream: true });
 
     let idx;
     while ((idx = buffer.indexOf('\n')) !== -1) {
@@ -450,6 +473,9 @@ async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) 
         }
       } catch { /* partial JSON lines skipped */ }
     }
+  }
+  } finally {
+    clearInterval(stallTimer);
   }
   return result;
 }
