@@ -461,82 +461,117 @@ reloadPrompt();
 
 /* ────────────────────────────── MODEL CALL ────────────────────────────── */
 
+const CALL_TRIES = Math.max(1, Number(process.env.NEO_CALL_RETRY || 3) || 3);
+const RETRY_DELAY = [1500, 4000, 9000];
+
+/* transient failures worth retrying — network hiccups, server 5xx, rate limits */
+const isRetryable = (code) => (code >= 500 || code === 429 || code === 408 || code === 409);
+const isNetworkErr = (e) =>
+  !(e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) &&
+  (/fetch failed|ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|network|read ECONNABORTED|UND_ERR/i.test(e && e.message ? String(e.message) + ' ' + String(e.cause && e.cause.message || '') : ''));
+
 async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) {
-  const ep = endpointOf(MODEL);
-  if (!ep || !ep.key) throw new Error('لا يوجد API Key — اكتب /apikey لضبط المفتاح');
-  const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener('abort', () => controller.abort());
-  }
-  const resp = await fetch(`${ep.base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      ...(toolDefs && toolDefs.length ? { tools: toolDefs, tool_choice: 'auto' } : {}),
-      stream: true,
-      stream_options: { include_usage: true },
-      max_tokens: 65000,
-      temperature: 0.35,
-    }),
-    signal: controller.signal,
-  });
-
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`api error ${resp.status}: ${err.slice(0, 300)}`);
-  }
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const result = { content: '', reasoning: '', toolCalls: [], usage: null };
-
-  /* watchdog: a fetch stream that stops sending bytes (mobile / flaky
-     network) would otherwise hang the agent forever with the spinner —
-     abort after STREAM_STALL_MS of total silence. */
-  const STREAM_STALL_MS = Number(process.env.NEO_STREAM_TIMEOUT || 60000);
-  let lastChunk = Date.now();
-  let stallReason = null;
-  const stallTimer = setInterval(() => {
-    if (Date.now() - lastChunk > STREAM_STALL_MS) {
-      clearInterval(stallTimer);
-      stallReason = 'انتهت مهلة الاستجابة — الشبكة توقفت، أعد المحاولة (اضغط ESC للإيقاف)';
-      controller.abort();
+  attemptLoop:
+  for (let attempt = 1; attempt <= CALL_TRIES; attempt++) {
+    const ep = endpointOf(MODEL);
+    if (!ep || !ep.key) throw new Error('لا يوجد API Key — اكتب /apikey لضبط المفتاح');
+    const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort());
     }
-  }, 2500);
+    let resp;
+    try {
+      resp = await fetch(`${ep.base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
+        body: JSON.stringify({
+          model: MODEL,
+          messages,
+          ...(toolDefs && toolDefs.length ? { tools: toolDefs, tool_choice: 'auto' } : {}),
+          stream: true,
+          stream_options: { include_usage: true },
+          max_tokens: 65000,
+          temperature: 0.35,
+        }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw e;
+      if (!isNetworkErr(e) || attempt >= CALL_TRIES) throw e;
+      await new Promise((r) => setTimeout(r, RETRY_DELAY[attempt - 1] || 4000));
+      continue;
+    }
 
-  try {
-    while (true) {
-      let chunk;
-      try {
-        chunk = await reader.read();
-      } catch (e) {
-        if (stallReason) throw new Error(stallReason);
-        throw e;
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => '');
+      if (isRetryable(resp.status) && attempt < CALL_TRIES) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY[attempt - 1] || 4000));
+        continue;
       }
-      const { done, value } = chunk;
-      if (done) break;
-      lastChunk = Date.now();
-      buffer += decoder.decode(value, { stream: true });
+      throw new Error(`api error ${resp.status}: ${err.slice(0, 300)}`);
+    }
 
-    let idx;
-    while ((idx = buffer.indexOf('\n')) !== -1) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const json = JSON.parse(payload);
-        if (json.usage) result.usage = json.usage;
-        const choice = json.choices && json.choices[0];
-        if (!choice) continue;
-        const delta = choice.delta || {};
-        if (delta.content) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const result = { content: '', reasoning: '', toolCalls: [], usage: null };
+
+    /* watchdog: a fetch stream that stops sending bytes (mobile / flaky
+       network) would otherwise hang the agent forever with the spinner —
+       abort after STREAM_STALL_MS of total silence. */
+    const STREAM_STALL_MS = Number(process.env.NEO_STREAM_TIMEOUT || 60000);
+    let lastChunk = Date.now();
+    let stallReason = null;
+    const stallTimer = setInterval(() => {
+      if (Date.now() - lastChunk > STREAM_STALL_MS) {
+        clearInterval(stallTimer);
+        stallReason = 'انتهت مهلة الاستجابة — الشبكة توقفت، أعد المحاولة (اضغط ESC للإيقاف)';
+        controller.abort();
+      }
+    }, 2500);
+
+    /* mid-stream network drop: if the socket dies BEFORE any content/tool
+       output reached the user, retry the whole request (nothing to lose).
+       If something already streamed, keep the partial output and let the
+       caller decide — never duplicate text on the screen. */
+    try {
+      while (true) {
+        let chunk;
+        try {
+          chunk = await reader.read();
+        } catch (e) {
+          if (stallReason) throw new Error(stallReason);
+          if (e && e.name === 'AbortError') throw e;
+          const nothingStreamed = !result.content && !result.reasoning &&
+            !(result.toolCalls && result.toolCalls.length);
+          if (nothingStreamed && attempt < CALL_TRIES) {
+            try { reader.releaseLock(); } catch {}
+            await new Promise((r) => setTimeout(r, RETRY_DELAY[attempt - 1] || 4000));
+            continue attemptLoop;
+          }
+          throw e;
+        }
+        const { done, value } = chunk;
+        if (done) break;
+        lastChunk = Date.now();
+        buffer += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const json = JSON.parse(payload);
+          if (json.usage) result.usage = json.usage;
+          const choice = json.choices && json.choices[0];
+          if (!choice) continue;
+          const delta = choice.delta || {};
+          if (delta.content) {
           result.content += delta.content;
           onDelta({ type: 'text', content: delta.content });
         }
@@ -562,10 +597,11 @@ async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) 
     }
   }
   } finally {
-    clearInterval(stallTimer);
+        clearInterval(stallTimer);
+      }
+      return result;
+    }
   }
-  return result;
-}
 
 /* ────────────────────────────── AGENT LOOP ────────────────────────────── */
 
