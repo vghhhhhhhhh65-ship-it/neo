@@ -250,3 +250,5 @@ printf '  First run → type  %s/apikey%s  inside neo to set your API key\n' "$B
 printf '  Commands: /help  /clear  /setup  /theme  /exit   ·   scroll: PgUp/PgDn / mouse wheel\n'
 printf '  Remove:   %srm -rf ~/.local/share/neo%s  +  %s%s%s\n' "$BYY" "$R0" "$BYY" "$BIN_DIR/neo" "$R0"
 printf '\n'
+printf '  %s★%s Made with %s♥%s by %sصاصا (Mostafa)%s  ·  %s@Mostafa_Desha1%s\n' "$YY" "$R0" "$RR" "$R0" "$BYY" "$R0" "$BCC" "$R0"
+printf '\n'

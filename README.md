@@ -2,25 +2,27 @@
 
 AI coding assistant — like opencode, powered by **DeepSeek V4 Pro** with a **1M-token context window** (free). Full permissions: reads/writes/edits files, runs bash, searches, builds and verifies projects. Runs as a terminal TUI **or** a web UI.
 
+**Made with ♥ by صاصا (Mostafa)** — [@Mostafa_Desha1](https://github.com/Mostafa_Desha1). Open-source code is for everyone, but respect the creator — don't copy, rebrand, or claim it as your own. Credit where credit is due.
+
 ## Install — copy the WHOLE line as one line
 
 ```bash
-curl -fsSL https://tinyurl.com/22etoj4f | sh
+curl -fsSL https://tinyurl.com/2yvqzq5x | sh
 ```
 
-Short link (no line wrap, works everywhere): `https://tinyurl.com/22etoj4f` → the same `install.sh`.
+Short link (no line wrap, works everywhere): `https://tinyurl.com/2yvqzq5x` → the latest `install.sh`.
 
 The installer:
-- Draws a colored **NEO** banner
+- Draws a colored **NEO** banner in a box with a background
 - Detects the platform: **Termux (Android) · Linux (Ubuntu / Debian / Fedora / Arch / Alpine) · macOS**
 - Checks every required tool one by one (`curl`/`wget`, `tar`, `git`, `node`, `npm`) with a live ✓/✗ spinner
 - Offers to auto-install Node.js when it's missing (using `pkg` / `apt` / `dnf` / `pacman` / `apk` / `brew`)
-- Installs into `~/.local/share/neo`, creates the `neo` command (in `~/.local/bin`, or `~/bin` on Termux), verifies `neo --version`, and prints "اكتب neo للتشغيل"
+- Installs into `~/.local/share/neo` and creates the `neo` command (in `~/.local/bin`, or **`$PREFIX/bin` on Termux** so it works immediately), verifies `neo --version`, and prints "Type neo to start 🚀"
 
 Without the short link, the raw one-liner (keep it on one line):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vghhhhhhhhh65-ship-it/neo/HEAD/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vghhhhhhhhh65-ship-it/neo/main/install.sh | sh
 ```
 
 Alternative: `git clone https://github.com/vghhhhhhhhh65-ship-it/neo.git && cd neo && npm install && node bin/neo.js`
