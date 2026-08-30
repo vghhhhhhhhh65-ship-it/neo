@@ -5,10 +5,10 @@ AI coding assistant — like opencode, powered by **DeepSeek V4 Pro** with a **1
 ## Install — copy the WHOLE line as one line
 
 ```bash
-curl -fsSL https://tinyurl.com/2bablb47 | sh
+curl -fsSL https://tinyurl.com/22etoj4f | sh
 ```
 
-Short link (no line wrap, works everywhere): `https://tinyurl.com/2bablb47` → the same `install.sh`.
+Short link (no line wrap, works everywhere): `https://tinyurl.com/22etoj4f` → the same `install.sh`.
 
 The installer:
 - Draws a colored **NEO** banner
@@ -20,7 +20,7 @@ The installer:
 Without the short link, the raw one-liner (keep it on one line):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vghhhhhhhhh65-ship-it/neo/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vghhhhhhhhh65-ship-it/neo/HEAD/install.sh | sh
 ```
 
 Alternative: `git clone https://github.com/vghhhhhhhhh65-ship-it/neo.git && cd neo && npm install && node bin/neo.js`
