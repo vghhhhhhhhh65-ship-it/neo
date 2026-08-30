@@ -53,16 +53,19 @@ function renderMd(src, width) {
     })
     .join('\n');
 
-  // code fences → panel block with a thin rule + a language cap (no heavy box)
+  // code fences → framed block with a language cap + themed border
   const fenceRe = /```(\w*)\n([\s\S]*?)(```|$)/g;
   const out = plain.replace(fenceRe, (_m, lang, code) => {
     const W = Math.max(10, width - 2);
+    const BW = Math.max(8, Math.min(W, 46));
     const body = code.trimEnd();
     const wrapped = body.split('\n').flatMap((l) => (stripAnsi(l).length > W ? wrap(l, W) : [l]));
-    const bar = C.gray + '─'.repeat(Math.max(8, Math.min(width - 2, 46))) + C.n;
-    const cap = lang ? C.border + '─ ' + C.pink + lang + C.n + '\n' : '';
+    const capTxt = lang ? C.pink + C.bold + lang + C.n : '';
+    const capW = lang ? wlen(stripAnsi(lang)) : 0;
+    const top = C.border + '╭─ ' + C.n + capTxt + (capW ? ' ' : '') + C.border + '─'.repeat(Math.max(1, BW - 4 - (capW ? capW + 1 : 0))) + '╮' + C.n;
     const mid = wrapped.map((l) => C.element + '  ' + C.text + l + C.n).join('\n');
-    return bar + '\n' + cap + mid + '\n' + bar;
+    const bot = C.border + '╰' + '─'.repeat(Math.max(2, BW - 2)) + '╯' + C.n;
+    return top + '\n' + mid + '\n' + bot;
   });
 
   return out;

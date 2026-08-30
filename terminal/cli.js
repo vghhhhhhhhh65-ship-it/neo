@@ -11,6 +11,7 @@ const { C, getWidth, getHeight, stripAnsi, clearLine, clearScreen, home, wrap, w
 const cfgmod = require('../config');
 const { renderMd } = require('./md');
 const { LineEditor } = require('./input');
+const bgs = require('./jobs');
 const updater = require('../update');
 const appVersion = () => { try { return require('../package.json').version; } catch { return ''; } };
 
@@ -245,7 +246,11 @@ function footerLine() {
   const L = ' ' + left + intr;
   const wl = wlen(stripAnsi(L));
   let R;
-  if (wl + 2 + wlen(stripAnsi(usage)) + 2 + wlen(stripAnsi(pal)) <= CW) R = usage + '  ' + pal;
+  const bgc = bgChipCache;
+  const bgl = bgc ? wlen(stripAnsi(bgc)) + 2 : 0;
+  if (bgl && wl + bgl + 2 + wlen(stripAnsi(usage)) + 2 + wlen(stripAnsi(pal)) <= CW) R = bgc + '  ' + usage + '  ' + pal;
+  else if (bgl && wl + bgl + 2 + wlen(stripAnsi(usage)) <= CW) R = bgc + '  ' + usage;
+  else if (wl + 2 + wlen(stripAnsi(usage)) + 2 + wlen(stripAnsi(pal)) <= CW) R = usage + '  ' + pal;
   else if (wl + 2 + wlen(stripAnsi(usage)) <= CW) R = usage;
   else R = '';
   const gap = Math.max(2, CW - wl - (R ? wlen(stripAnsi(R)) : 0));
@@ -268,7 +273,8 @@ function drawLower() {
   const W = COL();
   const M = Math.max(1, W - 3);              // inner run between the corners
   const scrollHint = scrollOff > 0 ? '   ' + C.gray + '↥ ' + scrollOff + ' أقدم' + C.n : '';
-  const hdr = '▣  ' + ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n + C.dimt + ' · ' + elapsedFmt() + C.n + scrollHint;
+  const bgseg = bgChipCache ? C.dimt + ' · ' + C.n + bgChipCache : '';
+  const hdr = '▣  ' + ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n + C.dimt + ' · ' + elapsedFmt() + C.n + bgseg + scrollHint;
 
   /* rounded corners + dim run: ╭ ring in accent, ─ run in dimt */
   const topRow = ac + '╭' + C.n + C.dimt + '─'.repeat(M) + C.n + ac + '╮' + C.n;
@@ -276,7 +282,7 @@ function drawLower() {
   const botRow = ac + '╰' + C.n + C.dimt + '─'.repeat(M) + C.n + ac + '╯' + C.n;
 
   /* meta row: |  mode · model …… chip │ */
-  const metaL = ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n;
+  const metaL = ac + C.bold + modeKey() + C.n + C.dimt + ' · ' + C.n + C.text + modelName() + C.n + (bgChipCache ? C.dimt + ' · ' + C.n + bgChipCache : '');
   const chip = C.dimt + '⏎ send · TAB⇄' + C.n;
   const iw = wlen(stripAnsi(metaL));
   const cw = wlen(stripAnsi(chip));
@@ -663,6 +669,164 @@ function newSession() {
   setStatus('New session', C.green);
 }
 
+/* ── background jobs — long runs survive the terminal closing ── */
+let BG_ON = false;
+let bgTick = null;
+let bgChipCache = '';
+function refreshBgChip() {
+  const j = bgs.list().find((x) => x.status === 'running' && bgs.alive(x.pid));
+  bgChipCache = j
+    ? C.blue + '● bg ' + elBg(j.started) + C.n
+    : BG_ON ? C.amber + C.dimt + 'bg:' + C.n + C.amber + 'on' + C.n
+    : bgs.list().length ? C.dimt + 'bg:off' + C.n
+    : '';
+}
+const bgTailers = {};
+const elBg = (t) => {
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  const m = Math.floor(s / 60);
+  return m ? m + 'm' + (s % 60) + 's' : s + 's';
+};
+const bgActive = () => bgs.list().some((j) => j.status === 'running' && bgs.alive(j.pid));
+const startBgTick = () => {
+  if (bgTick) return;
+  refreshBgChip();
+  bgTick = setInterval(() => { refreshBgChip(); drawLower(); }, 1000);
+};
+const stopBgTick = () => {
+  if (!bgTick) return;
+  clearInterval(bgTick);
+  bgTick = null;
+};
+function stopFollowJob(jobId) {
+  const st = bgTailers[jobId];
+  if (st && st.timer) { clearInterval(st.timer); st.timer = null; }
+  delete bgTailers[jobId];
+  if (!Object.keys(bgTailers).length) { stopBgTick(); refreshBgChip(); }
+}
+function followJob(jobId, opts = {}) {
+  stopFollowJob(jobId);
+  const st = { seen: 0, timer: null, terminal: false };
+  bgTailers[jobId] = st;
+  startBgTick();
+  const read = () => {
+    const r = bgs.readLines(jobId, st.seen);
+    for (const line of r.lines) {
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      applyAgentEvent(ev);
+      st.seen = r.count;
+      if (ev.type === 'done' || ev.type === 'error' || ev.type === 'aborted') {
+        st.terminal = true;
+        finaleBg(jobId, ev);
+      }
+    }
+    if (st.seen < r.count) st.seen = r.count;
+  };
+  read();
+  st.timer = setInterval(() => {
+    read();
+    if (st.terminal) {
+      stopFollowJob(jobId);
+      saveCurrent();
+      drawLower();
+      drawStatusLine();
+    }
+  }, 400);
+}
+function finaleBg(jobId, ev) {
+  endStream();
+  dropStatusTimer();
+  let which = '';
+  if (ev.type === 'done') {
+    setStatus('✓  Done (background)', C.green);
+    which = 'done';
+  } else if (ev.type === 'aborted') {
+    setStatus('⛔  Stopped (background)', C.amber);
+    which = 'aborted';
+  } else {
+    setStatus('✕  Error (background)', C.red);
+    const a = ensureAssistant();
+    a.parts.push({ type: 'text', text: '✕ ' + (ev.message || 'job failed') });
+    rebuildLog();
+    renderConv();
+  }
+  const m = bgs.readMeta(jobId);
+  if (m) {
+    const a = ensureAssistant();
+    const stt = m.status || which;
+    a.parts.push({
+      type: 'update',
+      ok: stt !== 'error',
+      text: (stt === 'done' ? '✔ مهمة الخلفية اكتملت' : stt === 'aborted' ? '⏹ توقفت مهمة الخلفية' : '✕ فشلت مهمة الخلفية — ' + (m.error || '')) + ' — /jobs لعرض كل المهام',
+    });
+    rebuildLog();
+    renderConv();
+  }
+  refreshBgChip();
+  drawLower();
+}
+function restoreActiveSession() {
+  try {
+    const db = loadSessions();
+    const act = db.active;
+    const s = (db.sessions || []).find((x) => x.id === act);
+    if (s) {
+      SESSION_ID = act;
+      MSGS = JSON.parse(JSON.stringify(s.msgs)) || [];
+    }
+  } catch {}
+}
+function rejoinBackground() {
+  try {
+    if (bgs.running(SESSION_ID)) {
+      attachIfRunning();
+      return;
+    }
+    refreshBgChip();
+    const m = bgs.readMeta(SESSION_ID);
+    if (m && m.ended) {
+      const a = ensureAssistant();
+      a.parts.push({ type: 'update', ok: m.status === 'done', text: (m.status === 'done' ? '✔ كانت مهمة بالخلفية انتهت' : m.status === 'aborted' ? '⏹ كانت مهمة بالخلفية اتوقفت' : '✕ كانت مهمة بالخلفية فشلت' + (m.error ? ' — ' + m.error : '')) + ' · النتيجة ظاهرة في المحادثة' });
+      rebuildLog(); renderConv(); drawLower();
+    }
+  } catch {}
+}
+function attachIfRunning() {
+  if (!bgs.running(SESSION_ID)) return;
+  const m = bgs.readMeta(SESSION_ID);
+  const a = ensureAssistant();
+  a.parts.push({ type: 'update', text: '🔵 مهمة بالخلفية تعمل الآن — ' + (m ? elBg(m.started) : '') + '\n     يعني تقدر تسيب التيرمنال وترجع بعدين، هتفضل شغّالة.\n     /jobs للمتابعة أو إيقافها', ok: true });
+  rebuildLog();
+  renderConv();
+  drawLower();
+  startBgTick();
+  followJob(SESSION_ID);
+}
+function launchBg(cmd) {
+  scrollOff = 0;
+  MSGS.push({ role: 'user', text: cmd, color: null });
+  rebuildLog();
+  renderConv();
+  drawLower();
+  saveCurrent();
+  const r = bgs.start(SESSION_ID, cmd);
+  if (!r.started) {
+    refreshBgChip();
+    setStatus(r.why === 'running' ? '⛔  في مهمة بالخلفية جارية لهذه الجلسة هنا' : '✕  فشل تشغيل الخلفية', C.red);
+    drawStatusLine();
+    return;
+  }
+  refreshBgChip();
+  const a = ensureAssistant();
+  a.parts.push({ type: 'update', text: '🔵 شغّلت المهمة في الخلفية — تقدر تقفل التيرمنال، هتكمّل لوحدها.\n     النتيجة هتوصلك هنا تلقائياً · /jobs لمتابعة أو إيقاف', ok: true });
+  rebuildLog();
+  renderConv();
+  drawLower();
+  startBgTick();
+  followJob(SESSION_ID);
+}
+
 /* ── modal picker — sessions / theme dialogs ── */
 /* ═══════ full-screen pages — الوضعيات تفتح كصفحات مستقلة فوق الشاشة كلها ═══════ */
 
@@ -881,6 +1045,80 @@ async function showThemePicker() {
   }
 }
 
+const JOB_ICON = { running: '🔵', done: '✔', error: '✕', aborted: '⏹' };
+function jobLine(j) {
+  const st = j.status || 'running';
+  const icon = JOB_ICON[st] || '·';
+  const run = bgs.running(j.sessionId);
+  const t = run ? 'منذ ' + elBg(j.started) : 'انتهت ' + timeAgo(j.ended || j.started);
+  const tag = run ? C.blue + C.bold + '● ' + elBg(j.started) + C.n + ' '+C.dimt+'· '+'شغّالة'+C.n : (st === 'done' ? C.green + '✔ تجهّزت' + C.n + ' '+C.dimt+'· '+t+C.n : C.red + (JOB_ICON[st]) + ' ' + st + C.n + ' '+C.dimt+'· '+t+C.n);
+  return { value: j.sessionId, job: j, icon, label: String(j.title || 'Background job'), desc: tag + (j.error ? '  ' + C.red + String(j.error).slice(0, 40) + C.n : '') };
+}
+async function showJobs() {
+  const build = () => bgs.list().filter((j) => j.sessionId).map(jobLine);
+  let items = build();
+  if (!items.length) {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'text', text: 'لا توجد مهام بالخلفية.\n\nفعّلها بـ /bg ثم أرسل مهمتك — تقدر تقفل التيرمنال و ترجع بعدين\nوالنتيجة هتوصلك هنا تلقائياً، أو افتح /jobs في أي وقت.' });
+    rebuildLog(); renderConv(); drawLower();
+    return;
+  }
+  let sel = 0;
+  const shown = items.slice(0, Math.max(1, ROWS() - 7));
+  const draw = () => {
+    const rows = Array(ROWS()).fill('');
+    let k = 0;
+    rows[k++] = C.art1 + C.bold + '  المهام بالخلفية · Background jobs' + (bgs.list().some((j) => bgs.running(j.sessionId)) ? C.blue + '   ○ شغّالة الآن' + C.n : '');
+    rows[k++] = '';
+    shown.forEach((it, i) => {
+      const active = i === sel;
+      const line = (active ? C.element : C.panel) + '  ' + (active ? '❯ ' : '  ') + (active ? C.bold : '') + it.icon + '  ' + it.label + C.n + (it.desc ? C.dimt + '   ' + it.desc + C.n : '');
+      rows[k++] = cxStr(line) + line;
+    });
+    rows[ROWS() - 1] = C.dimt + '  ↑↓ اختر · Enter متابعة (يفتح المحادثة ويُكمل حيّاً) · r تحديث · b إيقاف (توقف المهمة) · ESC خروج' + C.n;
+    pagePaint(rows);
+  };
+  draw();
+  const picked = await editor.readPicker((tok) => {
+    if (tok === ESC || tok === 'q' || tok === 'Q') { editor.finishPicker(null); return true; }
+    if (tok === ARROW_UP) { sel = (sel + shown.length - 1) % shown.length; draw(); return true; }
+    if (tok === ARROW_DOWN) { sel = (sel + 1) % shown.length; draw(); return true; }
+    if (tok === '\r' || tok === '\n') { editor.finishPicker(shown[sel].value); return true; }
+    if (tok === 'r' || tok === 'R') { items = build(); if (sel >= shown.length) sel = Math.max(0, shown.length - 1); draw(); return true; }
+    if (tok === 'b' || tok === 'B') {
+      const job = shown[sel] && shown[sel].job;
+      if (job && bgs.running(job.sessionId)) {
+        bgs.stop(job.sessionId);
+        setStatus('⏹  طلبت إيقاف مهمة الخلفية ' + job.title, C.amber);
+      }
+      items = build(); if (sel >= shown.length) sel = Math.max(0, shown.length - 1); draw(); return true;
+    }
+    return true;
+  });
+  restoreScreen();
+  if (!picked) return;
+  openSession(picked);
+  attachIfRunning();
+}
+function toggleBg() {
+  BG_ON = !BG_ON;
+  cfgmod.save({ background: BG_ON });
+  refreshBgChip();
+  setStatus(BG_ON ? '🔵 وضع الخلفية: يعمل — المهام الجديدة هتشتغل ورا التيرمنال' : 'الوضع العادي: يعمل — المهام شغّالة أمامك', BG_ON ? C.blue : C.green);
+  drawStatusLine();
+}
+function showPromptInfo() {
+  const { promptPath, reloadPrompt, SYSTEM_PROMPT } = core;
+  const r = reloadPrompt();
+  const a = ensureAssistant();
+  a.parts.push({
+    type: 'text',
+    text: `prompt file: ${r.path}\nstate:       ${r.ok ? (r.mode === 'custom' ? 'يُستخدم (أنت تستبدل نظام NEO)' : 'افتراضي — لم يوجد محتوى') : 'لا يُقرأ — ' + r.reason}\n\nاكتب برومتك في الملف ده بالكامل و NEO هتنفذه حرفياً كموجه نظام:\n  printf 'أنت خبير في …' > "${r.path}"\n\nاتفضل تعدّل ثم أعد الإرسال — تُقرأ من هنا تلقائياً بنفس الجلسة (الملف يغلّف الموضوع/السياق).`,
+  });
+  rebuildLog(); renderConv(); drawLower();
+  setStatus(String(SYSTEM_PROMPT).slice(0, 40) + '…', C.dimt);
+}
+
 /* ── "/" command palette — shows live while typing ── */
 const COMMANDS = [
   { value: '/plan', label: '/plan', desc: 'وضع الخطة · أخطّط فقط + TODO · أصفر' },
@@ -893,6 +1131,9 @@ const COMMANDS = [
   { value: '/theme', label: '/theme', desc: 'تبديل الثيم · يُحفظ فوراً' },
   { value: '/clear', label: '/clear', desc: 'إعادة ضبط المحادثة' },
   { value: '/config', label: '/config', desc: 'إعدادات config.json / config.toml' },
+  { value: '/bg', label: '/bg', desc: 'تشغيل المهام في الخلفية · تقفل التيرمنال و شغّالة' },
+  { value: '/jobs', label: '/jobs', desc: 'مهام الخلفية · متابعة / إيقاف / عرض النتائج' },
+  { value: '/prompt', label: '/prompt', desc: 'ملف البرومت · نحّي نظام NEO لموضوعك' },
   { value: '/info', label: '/info', desc: 'تفاصيل الجلسة' },
   { value: '/update', label: '/update', desc: 'التحقق من التحديث · الترقية التلقائية' },
   { value: '/help', label: '/help', desc: 'مساعدة واختصارات' },
@@ -1016,56 +1257,58 @@ function stopInterruptWatcher() {
 }
 
 /* ── run one turn ────────────────────────────────────────────── */
-async function runTurn(cmd) {
-  const emit = (ev) => {
-    if (ev.type === 'context_gc') {
+function applyAgentEvent(ev) {
+  if (ev.type === 'context_gc') {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'note', text: 'Ctx: تم تجاهل ' + ev.dropped + ' رسالة قديمة — الجلسة طويلة جداً' });
+    rebuildLog();
+    renderConv();
+    drawLower();
+  } else if (ev.type === 'iteration') {
+    startStatusSpinner('Thinking…', C.amber);
+  } else if (ev.type === 'reasoning_done') {
+    dropStatusTimer();
+    if (ev.content) {
       const a = ensureAssistant();
-      a.parts.push({ type: 'note', text: 'Ctx: تم تجاهل ' + ev.dropped + ' رسالة قديمة — الجلسة طويلة جداً' });
+      a.parts.push({ type: 'thinking', text: ev.content });
       rebuildLog();
       renderConv();
       drawLower();
-    } else if (ev.type === 'iteration') {
-      startStatusSpinner('Thinking…', C.amber);
-    } else if (ev.type === 'reasoning_done') {
-      dropStatusTimer();
-      if (ev.content) {
-        const a = ensureAssistant();
-        a.parts.push({ type: 'thinking', text: ev.content });
-        rebuildLog();
-        renderConv();
-        drawLower();
-      }
-    } else if (ev.type === 'text') {
-      streamChunk(ev.content);
-    } else if (ev.type === 'todo') {
-      const a = ensureAssistant();
-      const key = String(ev.key || '');
-      let part = a.parts.find((p) => p.type === 'todo' && p.key === key);
-      if (!part) { part = { type: 'todo', key, content: String(ev.content || ''), status: 'pending' }; a.parts.push(part); }
-      else {
-        if (ev.status === 'completed') part.status = 'completed';
-        if (ev.content) part.content = String(ev.content);
-      }
-      rebuildLog();
-      renderConv();
-      drawLower();
-    } else if (ev.type === 'tool_start') {
-      if (ev.name !== 'todo_update') printToolStart(ev);
-    } else if (ev.type === 'tool_done') {
-      if (ev.name !== 'todo_update') printToolDone(ev);
-    } else if (ev.type === 'usage') {
-      tokensUsage = { prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0, total: ev.total_tokens || 0 };
-      drawStatusLine();
-    } else if (ev.type === 'compacted') {
-      const a = ensureAssistant();
-      a.parts.push({ type: 'note', text: '🧠 ذاكرة مضغوطة تلقائياً — ' + ev.dropped + ' رسالة ← ملخص' + (ev.kept ? ' · بقي ' + ev.kept + ' حديثة كما هي' : '') });
-      a.parts.push({ type: 'compact', text: ev.summary });
-      rebuildLog();
-      renderConv();
-      drawLower();
-      setStatus('🧠 Memory compacted — سيكمل من الملخص', C.amber);
     }
-  };
+  } else if (ev.type === 'text') {
+    streamChunk(ev.content);
+  } else if (ev.type === 'todo') {
+    const a = ensureAssistant();
+    const key = String(ev.key || '');
+    let part = a.parts.find((p) => p.type === 'todo' && p.key === key);
+    if (!part) { part = { type: 'todo', key, content: String(ev.content || ''), status: 'pending' }; a.parts.push(part); }
+    else {
+      if (ev.status === 'completed') part.status = 'completed';
+      if (ev.content) part.content = String(ev.content);
+    }
+    rebuildLog();
+    renderConv();
+    drawLower();
+  } else if (ev.type === 'tool_start') {
+    if (ev.name !== 'todo_update') printToolStart(ev);
+  } else if (ev.type === 'tool_done') {
+    if (ev.name !== 'todo_update') printToolDone(ev);
+  } else if (ev.type === 'usage') {
+    tokensUsage = { prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0, total: ev.total_tokens || 0 };
+    drawStatusLine();
+  } else if (ev.type === 'compacted') {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'note', text: '🧠 ذاكرة مضغوطة تلقائياً — ' + ev.dropped + ' رسالة ← ملخص' + (ev.kept ? ' · بقي ' + ev.kept + ' حديثة كما هي' : '') });
+    a.parts.push({ type: 'compact', text: ev.summary });
+    rebuildLog();
+    renderConv();
+    drawLower();
+    setStatus('🧠 Memory compacted — سيكمل من الملخص', C.amber);
+  }
+}
+
+async function runTurn(cmd) {
+  const emit = (ev) => applyAgentEvent(ev);
 
   try {
     BUSY = true;
@@ -1224,9 +1467,15 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: `file:     ${file}\nformat:   .json / .jsonc / .toml\nkeys:     theme, model, mode, apiBase, apiKey, maxContext, workdir\ncurrent:  theme=${themeName()}, model=${modelName()}, context=${(MAX_CONTEXT / 1048576).toFixed(0)}M, workdir=${WORKDIR}`,
+      text: `file:     ${file}\nformat:   .json / .jsonc / .toml\nkeys:     theme, model, mode, apiBase, apiKey, maxContext, workdir, background, promptFile\ncurrent:  theme=${themeName()}, model=${modelName()}, context=${(MAX_CONTEXT / 1048576).toFixed(0)}M, workdir=${WORKDIR}, bg=${BG_ON ? 'ON' : 'off'}`,
     });
     rebuildLog(); renderConv(); drawLower();
+  } else if (bare === '/bg') {
+    toggleBg();
+  } else if (bare === '/jobs' || bare === '/zombie') {
+    await showJobs();
+  } else if (bare === '/prompt' || bare === '/system' || bare === '/sys') {
+    showPromptInfo();
   } else {
     const a = ensureAssistant();
     a.parts.push({ type: 'text', text: 'آمر غير معروف → /help' });
@@ -1239,6 +1488,7 @@ async function main() {
     const cf = cfgmod.load();
     if (cf.theme && listThemes().includes(cf.theme)) applyTheme(cf.theme);
     if (cf.mode === 'plan' || cf.mode === 'build') setMode(cf.mode);
+    BG_ON = !!cf.background;
   } catch {}
   applyTheme();
   termBegin();
@@ -1250,8 +1500,12 @@ async function main() {
       process.exit(0);
     }
   }
+  restoreActiveSession();
   paint();
-  drawSplash();
+  if (!MSGS.length) drawSplash();
+
+  /* resume a background job for this session if one is still running */
+  rejoinBackground();
 
   /* tell the user when this run was just upgraded (set by the updater) */
   if (process.env.NEO_UPDATED_FROM) {
@@ -1303,6 +1557,10 @@ async function main() {
         if (MSGS.length === 1 && MSGS[0].role === 'splash') { MSGS = []; paint(); }
 
         if (cmd.startsWith('/')) { await handleCommand(cmd); }
+        else if (BG_ON) {
+          scrollOff = 0;
+          launchBg(cmd);
+        }
         else {
           scrollOff = 0;
           MSGS.push({ role: 'user', text: cmd, color: null });

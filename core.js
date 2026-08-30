@@ -321,7 +321,29 @@ function sysPromptFacts() {
     .join('\n');
 }
 
-const SYSTEM_PROMPT = `You are NEO, a precise senior software engineer and coding agent. You run ON the user's machine with FULL permissions — that is normal and expected: you are a working tool, not a discussion bot.
+/* prompt-file override — user can point NEO at another topic/system prompt */
+const os = require('os');
+const NEO_HOME = path.join(os.homedir(), '.neo');
+const promptPath = () => {
+  try {
+    const raw = (cfg && cfg.promptFile && String(cfg.promptFile).trim()) || 'prompt.md';
+    if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2));
+    if (raw.startsWith('/')) return raw;
+    return path.join(NEO_HOME, raw);
+  } catch { return path.join(NEO_HOME, 'prompt.md'); }
+};
+const reloadPrompt = () => {
+  const p = promptPath();
+  try {
+    const t = fs.readFileSync(p, 'utf8').trim();
+    if (t) { SYSTEM_PROMPT = t; return { ok: true, path: p, length: Buffer.byteLength(t, 'utf8'), mode: 'custom' }; }
+    return { ok: true, path: p, length: 0, mode: 'default' };
+  } catch (e) {
+    return { ok: false, path: p, reason: e.code === 'ENOENT' ? 'missing' : e.message };
+  }
+};
+
+let SYSTEM_PROMPT = `You are NEO, a precise senior software engineer and coding agent. You run ON the user's machine with FULL permissions — that is normal and expected: you are a working tool, not a discussion bot.
 
 ${sysPromptFacts()}
 
@@ -372,6 +394,9 @@ You must PLAN, never execute:
 - Register EVERY planned step with todo_update (status="pending").
 - End your reply with exactly: 'خطتي جاهزة — حوّلني إلى وضع Build لتنفيذها' (Plan ready — switch me to Build).
 - Do NOT modify, create, run or delete anything.`;
+
+/* apply a user prompt file at boot (custom system prompt for the session) */
+reloadPrompt();
 
 /* ────────────────────────────── MODEL CALL ────────────────────────────── */
 
@@ -690,4 +715,4 @@ async function runAgent(clientMessages, emit, opts = {}) {
   }
 }
 
-module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles };
+module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles };
