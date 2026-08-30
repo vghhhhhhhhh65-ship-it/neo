@@ -7,10 +7,10 @@ AI coding assistant — like opencode, powered by **DeepSeek V4 Pro** with a **1
 ## Install — copy the WHOLE line as one line
 
 ```bash
-curl -fsSL https://tinyurl.com/2yvqzq5x | sh
+curl -fsSL https://tinyurl.com/26gl3kx9 | sh
 ```
 
-Short link (no line wrap, works everywhere): `https://tinyurl.com/2yvqzq5x` → the latest `install.sh`.
+Short link (no line wrap, works everywhere): `https://tinyurl.com/26gl3kx9` → the latest `install.sh`.
 
 The installer:
 - Draws a colored **NEO** banner in a box with a background
