@@ -217,9 +217,10 @@ function renderConv() {
   const n = convRows();
   if (!SCREEN) SCREEN = new Array(n).fill('');
   const vis = convSlice();
+  const pal = paletteRows();               // "/" command palette overlays the top rows
   let s = '';
   for (let i = 0; i < n; i++) {
-    const content = vis[i] || '';
+    const content = (pal && i < pal.length) ? (pal[i] || '') : (vis[i] || '');
     if (SCREEN[i] === content) continue;
     SCREEN[i] = content;
     s += goto(i + 1, 1) + padLine(content);
@@ -401,7 +402,11 @@ function bubbleRows(icon, title, borderColor, fillBg, lines, opts = {}) {
     const t = wlen(stripAnsi(l));
     for (const ln of (t > innerW ? wrap(l, innerW) : [l])) {
       const tn = wlen(stripAnsi(ln));
-      rows.push(C.dimt + '│' + C.n + fillBg + '  ' + ln + ' '.repeat(Math.max(0, innerW - tn)) + C.reset + C.dimt + '│' + C.n);
+      /* re-apply fillBg after any embedded hard reset so the terminal's own
+         base color can never bleed through inside the bubble; the closing
+         rail stays on the same background (no reset before it) */
+      const patched = ln.replace(/\x1b\[0m(?=.)/g, (m) => m + fillBg);
+      rows.push(C.dimt + '│' + C.n + fillBg + '  ' + patched + ' '.repeat(Math.max(0, innerW - tn)) + C.dimt + '│' + C.n);
     }
   }
   rows.push(C.dimt + '╰' + rail + '─'.repeat(Math.max(2, W - 2)) + C.n + C.dimt + '╯' + C.n);
@@ -899,34 +904,36 @@ function paletteMatches(q) {
   if (!s) return COMMANDS;
   return COMMANDS.filter((c) => (c.value + ' ' + c.label + ' ' + c.desc).toLowerCase().includes(s));
 }
-function showPalette(q) { palette = { items: paletteMatches(q), sel: 0, q }; }
+function showPalette(q) { palette = { items: paletteMatches(q), sel: 0, q }; renderConv(); }
 function closePalette() {
   if (!palette) return;
   palette = null;
   SCREEN = null; rebuildLog(); renderConv(); drawLower();
 }
-/* full-width command palette — fixed panel at the TOP of the conversation
-   area only (never touches the footer), rows truncated to real cell width. */
-function drawPalette() {
-  if (!palette) return;
-  const rows = Math.max(3, convRows() - 1);
+/* the "/" command palette renders as an overlay on TOP of the conversation
+   area — it goes through renderConv (like every other row) so a repaint can
+   never wipe it or leave it desynced/wedged. Rows fill the exact cell width;
+   padLine adds the trailing theme background. */
+function paletteRows() {
+  if (!palette) return null;
+  const maxR = Math.max(3, convRows() - 1);
   const all = palette.items;
-  const s0 = Math.max(0, palette.sel - (rows - 1));
-  const shown = all.slice(s0, s0 + rows);
+  const s0 = Math.max(0, palette.sel - (maxR - 1));
+  const shown = all.slice(s0, s0 + maxR);
   const over = all.length - s0 - shown.length;
   const ac = modeColor();
-  let s = '';
+  const out = [];
   const headTxt = ' Commands — الأوامر' + (over > 0 ? C.dimt + '   +' + over + ' أكثر ↑↓' : '');
   const L = ac + '╭' + C.n + C.panel + C.bold + headTxt + C.n;
   const R = C.dimt + '  ↑↓ ⏎ esc  ' + C.n + ac + '╮' + C.n;
   const lw = wlen(stripAnsi(L)), rw = wlen(stripAnsi(R));
-  s += goto(1, 1) + '\x1b[2K' + C.panel + L + ' '.repeat(Math.max(0, COL() - 1 - lw - rw)) + R + C.reset;
+  out.push(C.panel + L + ' '.repeat(Math.max(0, COL() - 1 - lw - rw)) + R);
   if (!shown.length) {
     const body = C.dimt + 'لا توجد نتائج — امسح النص لمشاهدة كل الأوامر' + C.n;
-    const mid = ' ' + body + ' '.repeat(Math.max(0, COL() - 5 - wlen(stripAnsi(body)))) + ' ';
-    s += goto(2, 1) + '\x1b[2K' + C.panel + ac + '│' + C.n + mid + ac + '│' + C.n + C.reset;
+    const bw = wlen(stripAnsi(body));
+    out.push(C.panel + ac + '│' + C.n + ' ' + body + ' '.repeat(Math.max(0, COL() - 4 - bw)) + ' ' + ac + '│' + C.n);
   } else {
-    for (let i = 0; i < shown.length; i++) {
+    for (let i = 0; i < shown.length && out.length < maxR; i++) {
       const it = shown[i];
       const active = s0 + i === palette.sel;
       const val = active ? C.bold + it.value + C.n : it.value;
@@ -934,29 +941,33 @@ function drawPalette() {
       const row = mark + (active ? C.text : C.dimt) + val + C.n + C.dimt + '   ' + it.desc + C.n;
       const body = truncateFmt(row, Math.max(4, COL() - 4));
       const bgc = active ? C.element : C.panel;
-      const mid = ' ' + body + ' '.repeat(Math.max(0, COL() - 4 - wlen(stripAnsi(body)))) + ' ';
-      s += goto(2 + i, 1) + '\x1b[2K' + bgc + ac + '│' + C.n + mid + ac + '│' + C.n + C.reset;
+      out.push(bgc + ac + '│' + C.n + ' ' + body + ' '.repeat(Math.max(0, COL() - 4 - wlen(stripAnsi(body)))) + ' ' + ac + '│' + C.n);
     }
   }
-  if (2 + shown.length <= rows) {
-    s += goto(2 + shown.length, 1) + '\x1b[2K' + C.panel + ac + '╰' + C.n + C.dimt + '─'.repeat(Math.max(1, COL() - 3)) + C.n + ac + '╯' + C.n + ' ' + C.reset;
+  if (out.length < maxR) {
+    out.push(C.panel + ac + '╰' + C.n + C.dimt + '─'.repeat(Math.max(1, COL() - 3)) + C.n + ac + '╯' + C.n);
   }
-  process.stdout.write(s);
+  return out;
 }
 function paletteNav(dir) {
   if (!palette || !palette.items.length) return false;
   palette.sel = (palette.sel + dir + palette.items.length) % palette.items.length;
-  drawPalette();
+  renderConv();
   return true;
 }
 function paletteEnter() {
-  if (!palette || !palette.items.length) return false;
-  const it = palette.items[palette.sel] || palette.items[0];
+  if (!palette) return false;
   const typed = '/' + (palette.q || '');
-  // typed multi-word query matching a single command → run the typed text
-  const preferTyped = palette.items.length === 1 && typed.split(/\s+/).length > 1 && it.value.split(' ')[0] === typed.split(' ')[0];
+  const it = palette.items.length ? (palette.items[palette.sel] || palette.items[0]) : null;
+  const multi = palette.items.length === 1 && typed.split(/\s+/).length > 1 && it && it.value.split(' ')[0] === typed.split(' ')[0];
   palette = null;
-  editor.resolveValue(preferTyped ? typed : it.value);
+  if (!it) {
+    // no matching command → consume Enter, clear the "/…" draft, stay put
+    editor.buf = ''; editor.pos = 0;
+    SCREEN = null; rebuildLog(); renderConv(); drawLower(); editor.draw();
+    return true;
+  }
+  editor.resolveValue(multi ? typed : it.value);
   return true;
 }
 
@@ -972,8 +983,14 @@ function cancelGeneration() {
   if (abortState || turnAbort) setStatus('⛔  Stopping…', C.amber);
 }
 function onEscPress() {
-  if (palette) { palette = null; SCREEN = null; rebuildLog(); renderConv(); drawLower(); return; } // ESC closes the command palette
-  cancelGeneration();                                                                              // ESC stops the AI right away
+  if (palette) {
+    // close the palette AND clear the partial "/…" draft (like opencode)
+    palette = null;
+    editor.buf = ''; editor.pos = 0;
+    SCREEN = null; rebuildLog(); renderConv(); drawLower(); editor.draw();
+    return; // ESC closes the command palette
+  }
+  cancelGeneration();                                              // ESC stops the AI right away
 }
 
 /* during a run the editor has no listener, so install a raw watcher that
@@ -1259,7 +1276,7 @@ async function main() {
 
   editor.onChange = (buf) => {
     const t = buf.trim();
-    if (t.startsWith('/')) { showPalette(t.slice(1)); drawPalette(); }
+    if (t.startsWith('/')) { showPalette(t.slice(1)); }
     else if (palette) closePalette();
   };
   editor.onNavDir = (dir) => paletteNav(dir);
@@ -1267,7 +1284,7 @@ async function main() {
   editor.onEscPress = () => onEscPress();
   editor.onPaletteShortcut = () => {
     if (palette) closePalette();
-    else { showPalette(''); drawPalette(); }
+    else { showPalette(''); }
   };
   editor.onModeToggle = toggleMode;
   editor.onScrollPage = (dir) => scrollPage(dir);

@@ -3,14 +3,17 @@
 const { C, getWidth, wrap, stripAnsi, wlen } = require('./ansi');
 
 function inlines(t) {
+  /* note: C.n (default-fg) is used instead of C.reset so the theme's
+     background is never dropped mid-row — otherwise the terminal's own
+     base color flashes through inside the reply bubbles. */
   return t
-    .replace(/`([^`\n]+)`/g, (m, x) => C.pink + x + C.reset)
-    .replace(/\*\*([^*\n]+)\*\*/g, C.bold + '$1' + C.reset)
-    .replace(/__([^_\n]+)__/g, C.bold + '$1' + C.reset)
-    .replace(/\*([^*\n]+)\*/g, C.italic + '$1' + C.reset)
-    .replace(/_([^_\n]+)_/g, C.italic + '$1' + C.reset)
-    .replace(/~~([^~\n]+)~~/g, C.dim + C.italic + '$1' + C.reset)
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, C.blue + C.underline + '$1' + C.reset)
+    .replace(/`([^`\n]+)`/g, (m, x) => C.pink + x + C.n)
+    .replace(/\*\*([^*\n]+)\*\*/g, C.bold + '$1' + C.n)
+    .replace(/__([^_\n]+)__/g, C.bold + '$1' + C.n)
+    .replace(/\*([^*\n]+)\*/g, C.italic + '$1' + C.n)
+    .replace(/_([^_\n]+)_/g, C.italic + '$1' + C.n)
+    .replace(/~~([^~\n]+)~~/g, C.dim + C.italic + '$1' + C.n)
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, C.blue + C.underline + '$1' + C.n)
     .replace(/\*+/g, '')
     .replace(/_+/g, '')
     .replace(/#+/g, '')
@@ -30,19 +33,19 @@ function renderMd(src, width) {
       let m = trimmed.match(/^(#{1,6})\s+(.*)$/);
       if (m) {
         const n = m[1].length;
-        return (n <= 2 ? C.h2 + C.bold : C.dimt + C.bold) + m[2].trim() + C.reset;
+        return (n <= 2 ? C.h2 + C.bold : C.dimt + C.bold) + m[2].trim() + C.n;
       }
-      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return C.gray + '─'.repeat(Math.min(width, 40)) + C.reset;
-      if (/^[-*+]\s+/.test(trimmed)) return C.blue + '•' + C.reset + ' ' + inlines(trimmed.replace(/^[-*+]\s+/, ''));
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return C.gray + '─'.repeat(Math.min(width, 40)) + C.n;
+      if (/^[-*+]\s+/.test(trimmed)) return C.blue + '•' + C.n + ' ' + inlines(trimmed.replace(/^[-*+]\s+/, ''));
       if (/^\d+[.)]\s+/.test(trimmed)) {
         const num = trimmed.match(/^\d+/)[0];
-        return C.blue + C.bold + num + '.' + C.reset + ' ' + inlines(trimmed.replace(/^\d+[.)]\s+/, ''));
+        return C.blue + C.bold + num + '.' + C.n + ' ' + inlines(trimmed.replace(/^\d+[.)]\s+/, ''));
       }
-      if (trimmed.startsWith('>')) return C.gray + '┃ ' + C.reset + C.dimt + C.italic + inlines(trimmed.replace(/^>\s?/, '')) + C.reset;
+      if (trimmed.startsWith('>')) return C.gray + '┃ ' + C.n + C.dimt + C.italic + inlines(trimmed.replace(/^>\s?/, '')) + C.n;
       if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
         const cells = trimmed.split('|').slice(1, -1).map((c) => c.trim());
-        if (cells.length && cells.every((c) => /^:?-+:?$/.test(c))) return C.gray + '─'.repeat(width) + C.reset;
-        return '  ' + cells.map((c) => inlines(c)).join(C.gray + '│' + C.reset + ' ');
+        if (cells.length && cells.every((c) => /^:?-+:?$/.test(c))) return C.gray + '─'.repeat(width) + C.n;
+        return '  ' + cells.map((c) => inlines(c)).join(C.gray + '│' + C.n + ' ');
       }
       return inlines(l);
     })
@@ -54,9 +57,9 @@ function renderMd(src, width) {
     const W = Math.max(10, width - 2);
     const body = code.trimEnd();
     const wrapped = body.split('\n').flatMap((l) => (stripAnsi(l).length > W ? wrap(l, W) : [l]));
-    const bar = C.gray + '─'.repeat(Math.max(8, Math.min(width - 2, 46))) + C.reset;
-    const cap = lang ? C.border + '─ ' + C.pink + lang + C.reset + '\n' : '';
-    const mid = wrapped.map((l) => C.element + '  ' + C.text + l + C.reset).join('\n');
+    const bar = C.gray + '─'.repeat(Math.max(8, Math.min(width - 2, 46))) + C.n;
+    const cap = lang ? C.border + '─ ' + C.pink + lang + C.n + '\n' : '';
+    const mid = wrapped.map((l) => C.element + '  ' + C.text + l + C.n).join('\n');
     return bar + '\n' + cap + mid + '\n' + bar;
   });
 

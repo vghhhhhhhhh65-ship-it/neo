@@ -52,7 +52,7 @@ In the TUI you get:
 - **Auto-update**: NEO checks for a newer release at launch (and every 45 min). When one exists it downloads it, applies it automatically, and restarts itself into the new version — your chat session, key and config in `~/.neo` are kept. `/update` forces an instant check + upgrade. Run `NEO_DISABLE_UPDATE=1 neo` to turn auto-update off.
 - **In-app scrolling** — PgUp/PgDn and the mouse wheel scroll the history; the log is never wiped because the app runs on its own (alt) screen
 - Smart context window: long sessions are auto-compacted into a summary note
-- Themes (dracula default) — `/theme`
+- Themes (dracula default) — `/theme` — dark: `dracula  github-dark  tokyo-night  nord  gruvbox  catppuccin-mocha` · light: `solarized-light  rose-pine-dawn  github-light  gruvbox-light`
 - Works with your mouse wheel and ctrl+p, ctrl+c, ESC-to-stop
 
 ## Config
