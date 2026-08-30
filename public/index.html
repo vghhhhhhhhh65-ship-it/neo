@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEO Agent — AI Coding Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ══════════ TOPBAR ══════════ -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"><span>N</span></div>
+        <div class="brand-text">
+          <span class="brand-name">NEO Agent</span>
+          <span class="brand-sub">AI Coding Assistant</span>
+        </div>
+      </div>
+
+      <div class="model-pill" id="modelPill">
+        <span class="dot green"></span>
+        <span id="modelName">DeepSeek V4 Pro</span>
+        <span class="badge-free">FREE</span>
+      </div>
+
+      <div class="stats">
+        <div class="stat-box" title="Prompt tokens">
+          <span class="stat-label">Prompt</span>
+          <span class="stat-value" id="statPrompt">0</span>
+        </div>
+        <div class="stat-box" title="Completion tokens">
+          <span class="stat-label">Output</span>
+          <span class="stat-value" id="statCompletion">0</span>
+        </div>
+        <div class="stat-box" title="Total tokens">
+          <span class="stat-label">Total</span>
+          <span class="stat-value accent" id="statTotal">0</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ══════════ CONTEXT BAR ══════════ -->
+    <div class="contextbar">
+      <div class="context-inner">
+        <span class="ctx-label">Context window</span>
+        <div class="ctx-track"><div class="ctx-fill" id="ctxFill"></div></div>
+        <span class="ctx-num" id="ctxNum">0%</span>
+        <span class="ctx-max">/ 1M tokens</span>
+      </div>
+    </div>
+
+    <!-- ══════════ CHAT ══════════ -->
+    <main class="chat" id="chat"></main>
+
+    <!-- ══════════ INPUT ══════════ -->
+    <footer class="composer-wrap">
+      <div class="composer">
+        <textarea id="input" placeholder="اطلب من NEO يبني لك أي مشروع كود…" rows="1"></textarea>
+        <button id="sendBtn" class="send-btn" title="إرسال">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 4v12m0 0l-5-5m5 5l5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="composer-hint">
+        <span class="hint-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> Full permissions</span>
+        <span class="sep">•</span>
+        <span class="hint-item" id="hintModel">DeepSeek V4 Pro • 1M context</span>
+        <span class="sep">•</span>
+        <span class="hint-item">Light theme</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- secret canvas for RTL-safe tool strings -->
+  <script src="app.js"></script>
+</body>
+</html>

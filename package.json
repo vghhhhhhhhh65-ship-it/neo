@@ -1,0 +1,16 @@
+{
+  "name": "neo-agent",
+  "version": "1.1.0",
+  "description": "NEO Agent - AI coding assistant (terminal TUI + web UI) with DeepSeek V4 Pro",
+  "main": "bin/neo.js",
+  "bin": {
+    "neo": "bin/neo.js"
+  },
+  "scripts": {
+    "start": "node bin/neo.js web --hostname 0.0.0.0",
+    "tui": "node bin/neo.js"
+  },
+  "dependencies": {
+    "express": "^4.22.2"
+  }
+}

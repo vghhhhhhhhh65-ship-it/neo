@@ -1,0 +1,8 @@
+node_modules/
+config.json
+.neo/
+.neo-agent/
+sessions/
+*.log
+.DS_Store
+*.tmp
