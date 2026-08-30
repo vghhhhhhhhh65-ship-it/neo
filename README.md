@@ -2,27 +2,36 @@
 
 AI coding assistant — like opencode, powered by **DeepSeek V4 Pro** with a **1M-token context window** (free). Full permissions: reads/writes/edits files, runs bash, searches, builds and verifies projects. Runs as a terminal TUI **or** a web UI.
 
-## Install (one command, any terminal with Node.js)
+## Install — copy the WHOLE line as one line
+
+```bash
+curl -fsSL https://tinyurl.com/2bablb47 | sh
+```
+
+Short link (no line wrap, works everywhere): `https://tinyurl.com/2bablb47` → the same `install.sh`.
+
+The installer:
+- Draws a colored **NEO** banner
+- Detects the platform: **Termux (Android) · Linux (Ubuntu / Debian / Fedora / Arch / Alpine) · macOS**
+- Checks every required tool one by one (`curl`/`wget`, `tar`, `git`, `node`, `npm`) with a live ✓/✗ spinner
+- Offers to auto-install Node.js when it's missing (using `pkg` / `apt` / `dnf` / `pacman` / `apk` / `brew`)
+- Installs into `~/.local/share/neo`, creates the `neo` command (in `~/.local/bin`, or `~/bin` on Termux), verifies `neo --version`, and prints "اكتب neo للتشغيل"
+
+Without the short link, the raw one-liner (keep it on one line):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vghhhhhhhhh65-ship-it/neo/main/install.sh | sh
 ```
 
-That downloads the app into `~/.local/share/neo` and creates a `neo` command. Then:
+Alternative: `git clone https://github.com/vghhhhhhhhh65-ship-it/neo.git && cd neo && npm install && node bin/neo.js`
+
+Then:
 
 ```bash
 neo            # start the terminal UI (first run: /apikey)
 ```
 
-Manual install if you prefer git:
-
-```bash
-git clone https://github.com/vghhhhhhhhh65-ship-it/neo.git
-cd neo && npm install
-node bin/neo.js        # or: npm run tui
-```
-
-> Requires Node.js (Termux on Android: `pkg install nodejs`).
+> Requires Node.js (Termux on Android: `pkg install nodejs-lts`).
 
 ## Terminal UI (recommended)
 
