@@ -5,7 +5,8 @@ const os = require('os');
 const path = require('path');
 const { exec } = require('child_process');
 const core = require('../core');
-const { runAgent, MODELS, API_BASE, MAX_CONTEXT, WORKDIR, SYSTEM_PROMPT, setMode, getMode, setApiKey, getApiKey, setModel, getModel, runCompact, modelCtxLimit } = core;
+const { runAgent, MODELS, API_BASE, MAX_CONTEXT, WORKDIR, SYSTEM_PROMPT, setMode, getMode, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, swapModels, resetModels, runCompact, modelCtxLimit } = core;
+const ocx = require('./opencode');
 const modelName = () => getModel();
 const { C, getWidth, getHeight, stripAnsi, clearLine, clearScreen, home, wrap, wlen, applyTheme, listThemes, themeName, themeLabel, goto } = require('./ansi');
 const cfgmod = require('../config');
@@ -923,6 +924,8 @@ const COMMANDS = [
   { value: '/plan', label: '/plan', desc: 'وضع الخطة · أخطّط فقط + TODO · أصفر' },
   { value: '/build', label: '/build', desc: 'وضع التنفيذ · أنفّذ فوراً · TAB للتبديل' },
   { value: '/model', label: '/model', desc: 'اختيار النموذج · Models مجاناً' },
+  { value: '/opencode', label: '/opencode', desc: 'محادثة جديدة بنماذج opencode' },
+  { value: '/neo', label: '/neo', desc: 'الرجوع لإعدادات NEO الافتراضية' },
   { value: '/apikey', label: '/apikey', desc: 'إعداد مفتاح API · xkiro.com' },
   { value: '/compact', label: '/compact', desc: 'ضغط الذاكرة إلى ملخص أقسام · يعمل تلقائياً' },
   { value: '/setup', label: '/setup', desc: 'إعادة صفحة الإعداد: مفتاح / مزوّد' },
@@ -1207,7 +1210,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: '/help   مساعدة واختصارات\n/model   اختيار النموذج (الكل مجاني)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
+      text: '/help   مساعدة واختصارات\n/model   اختيار النموذج (الكل مجاني)\n/opencode محادثة جديدة بنماذج opencode · /neo للرجوع لـ NEO\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/clear') {
@@ -1220,7 +1223,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: `## تحديثات الجلسة\n\n- **model**:   ${modelName()}\n- **api**:     ${stripAnsi(API_BASE)}\n- **workdir**: ${WORKDIR}\n- **context**: ${fmt(modelCtxLimit())} tokens (ضغط تلقائي عند ~80%)\n- **os**:      ${os.platform()} ${os.release()}\n- **session**: ${SESSION_ID}\n- **theme**:   ${themeName()}\n- **mode**:    ${modeKey()}\n- **apiKey**:  ${getApiKey() || 'غير مضبوط — اكتب /apikey أو افتح /setup'}`,
+      text: `## تحديثات الجلسة\n\n- **model**:   ${modelName()}\n- **api**:     ${stripAnsi(getApiBase())}\n- **workdir**: ${WORKDIR}\n- **context**: ${fmt(modelCtxLimit())} tokens (ضغط تلقائي عند ~80%)\n- **os**:      ${os.platform()} ${os.release()}\n- **session**: ${SESSION_ID}\n- **theme**:   ${themeName()}\n- **mode**:    ${modeKey()}\n- **apiKey**:  ${getApiKey() || 'غير مضبوط — اكتب /apikey أو افتح /setup'}`,
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/exit' || bare === '/quit') {
@@ -1257,6 +1260,41 @@ async function handleCommand(cmd) {
     applyMode(getMode() === 'plan' ? 'build' : 'plan');
   } else if (bare === '/model') {
     await showModels();
+  } else if (bare === '/opencode' || bare === '/oc') {
+    const prof = ocx.profile();
+    if (!prof) {
+      setStatus('✕  مفتاح opencode غير موجود — سجّل الدخول في opencode أولاً', C.red);
+      drawStatusLine();
+    } else {
+      cfgmod.save({ profile: 'opencode' });
+      setApiBase(prof.apiBase);
+      setApiKey(prof.apiKey);
+      swapModels(prof.models);
+      setModel(prof.models[0] ? prof.models[0].id : getModel());
+      newSession();
+      const a = ensureAssistant();
+      a.parts.push({
+        type: 'update',
+        ok: true,
+        text: '🟦 تحوّلت إلى opencode — ' + prof.models.length + ' نموذج · ' + getApiBase().replace(/^https:\/\//, '') + '\n     اكتب /models للاختيار · /neo للرجوع لـ NEO',
+      });
+      rebuildLog(); renderConv(); drawLower();
+      setStatus('✓  OpenCode mode · model: ' + modelName(), C.green);
+    }
+  } else if (bare === '/neo') {
+    cfgmod.save({ profile: '' });
+    setApiBase(process.env.API_BASE || cfgmod.load().apiBase || 'https://api.xkiro.com/v1');
+    setApiKey(process.env.API_KEY || cfgmod.load().apiKey || '');
+    resetModels();
+    newSession();
+    const a = ensureAssistant();
+    a.parts.push({
+      type: 'update',
+      ok: true,
+      text: '🔵 رجعت إلى NEO — النماذج الافتراضية · ' + getApiBase().replace(/^https:\/\//, ''),
+    });
+    rebuildLog(); renderConv(); drawLower();
+    setStatus('✓  NEO mode · model: ' + modelName(), C.green);
   } else if (bare === '/apikey' || bare === '/key') {
     await showApiKey();
   } else if (bare === '/config' || bare === '/cfg') {
@@ -1281,6 +1319,15 @@ async function main() {
     const cf = cfgmod.load();
     if (cf.theme && listThemes().includes(cf.theme)) applyTheme(cf.theme);
     if (cf.mode === 'plan' || cf.mode === 'build') setMode(cf.mode);
+    if (cf.profile === 'opencode') {
+      const prof = ocx.profile();
+      if (prof) {
+        setApiBase(prof.apiBase);
+        setApiKey(prof.apiKey);
+        swapModels(prof.models);
+        setModel(prof.models[0] ? prof.models[0].id : getModel());
+      }
+    }
   } catch {}
   applyTheme();
   termBegin();

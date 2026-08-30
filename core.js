@@ -31,6 +31,22 @@ const setModelRaw = (m) => { if (typeof m === 'string' && m.trim()) MODEL = m.tr
 const getModel = () => MODEL;
 const setApiBase = (u) => { if (typeof u === 'string' && u.trim()) API_BASE = u.trim().replace(/\/+$/, ''); };
 const getApiBase = () => API_BASE;
+/* hot-swap the model catalog in place (same array reference, so every
+   consumer — picker, ctx limit, setModel — sees the new list) */
+const NEO_DEFAULT_MODELS = [...MODELS];
+const swapModels = (list) => {
+  if (!Array.isArray(list) || !list.length) return false;
+  MODELS.length = 0;
+  MODELS.push(...list);
+  return true;
+};
+const resetModels = (modelId) => {
+  MODELS.length = 0;
+  MODELS.push(...NEO_DEFAULT_MODELS);
+  if (modelId && MODELS.some((x) => x.id === modelId)) MODEL = modelId;
+  else MODEL = process.env.MODEL || cfg.model || MODELS[1].id;
+  return true;
+};
 const MAX_CONTEXT = cfg.maxContext || 1048576;
 /* effective context window per model — custom/unknown providers fall back to config */
 const modelCtxLimit = () => {
@@ -719,4 +735,4 @@ async function runAgent(clientMessages, emit, opts = {}) {
   }
 }
 
-module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles };
+module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles, swapModels, resetModels, NEO_DEFAULT_MODELS };
