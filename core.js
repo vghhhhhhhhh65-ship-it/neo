@@ -24,6 +24,7 @@ const getApiKey = () => (API_KEY ? API_KEY.slice(0, 4) + '…' + API_KEY.slice(-
    request but are text-only and only say "cannot see images"/reason).
    codestral/devstral are code-only and refuse images. */
 const MODELS = [
+  { id: 'minimax/minimax-m2.7:free', name: 'MiniMax M2.7 Free', api: 'xkiro', tag: 'xkiro · سريع · free', ctx: 1048576 },
   { id: 'qwen/qwen3-vl-plus:free', name: 'Qwen3 VL Plus Free', api: 'xkiro', tag: 'xkiro · vision 🖼 · free · سريع', ctx: 131072, vision: true },
   { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', api: 'xkiro', tag: 'xkiro · 1M ctx', ctx: 1048576 },
   { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
@@ -342,20 +343,28 @@ ${grid}`);
 
     /* ── Part 3: Vision API — send the REAL image to a vision-capable
        model. Prefer the active model if it is vision-capable; otherwise
-       fall back to the built-in free VL model. Any failure is reported
-       and skipped (never hangs the agent). ── */
+       try a list of built-in free VL models in order (a free endpoint can
+       500/quit, so move to the next). Any failure is reported and
+       skipped (never hangs the agent). ── */
     try {
       const currentModel = MODELS.find((m) => m.id === MODEL);
-      const useModel = (currentModel && currentModel.vision)
-        ? currentModel
-        : (MODELS.find((m) => m.id === 'qwen/qwen3-vl-plus:free') || MODELS.find((m) => m && m.vision));
-      if (useModel) {
+      const candidates = [];
+      if (currentModel && currentModel.vision) candidates.push(currentModel);
+      for (const mid of ['qwen/qwen3-vl-plus:free', 'qwen/qwen3.5-omni-flash:free', 'qwen/qwen3-omni-flash:free']) {
+        const m = MODELS.find((x) => x.id === mid);
+        if (m && m.vision !== true) { /* keep as candidate anyway */ }
+        if (m && !candidates.some((c) => c.id === mid)) candidates.push(m);
+      }
+      for (const useModel of candidates) {
+        if (!useModel) continue;
         const ep = endpointOf(useModel.id);
-        if (ep && ep.key) {
-          const imgBuf = await fsp.readFile(imgPath);
-          const b64 = imgBuf.toString('base64');
-          const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.tiff': 'image/tiff' }[ext] || 'image/jpeg';
-          const prompt = args.prompt || 'Describe this image in FULL detail so any developer can recreate it EXACTLY in a website: page background hex, section-by-section layout top-to-bottom, every text with its hex colour, buttons/CTAs with hex, cards, toggles, spacing. List precise hex values, then if it looks like a web page/app UI, include a SINGLE COMPLETE HTML page (with <style>) that reproduces it exactly.';
+        if (!ep || !ep.key) continue;
+        const imgBuf = await fsp.readFile(imgPath);
+        const b64 = imgBuf.toString('base64');
+        const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.tiff': 'image/tiff' }[ext] || 'image/jpeg';
+        const prompt = args.prompt || 'Look at this image carefully and identify WHAT it shows (a website page, a mobile app screen, a desktop application window, a tool/gadget UI, a dashboard, a poster, a mockup, etc). Then describe everything needed to rebuild it EXACTLY: the type of thing it is, every colour with its precise hex (background, text, buttons, cards, toggles), the section-by-section layout top-to-bottom, fonts/style, spacing, and interactive elements. If the image shows a website or web UI, include a SINGLE COMPLETE HTML page (with <style>) that reproduces it exactly. If it shows an app or tool window, describe its controls and features so that UI/software can be coded exactly like it.';
+        let okResp = false;
+        try {
           const resp = await fetch(`${ep.base}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
@@ -373,13 +382,21 @@ ${grid}`);
             }),
             signal: AbortSignal.timeout(120000),
           });
-          if (resp.ok) {
-            const data = await resp.json();
-            const desc = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-            if (desc.trim()) parts.push(`👁️ Vision (${useModel.name}):\n${desc.trim()}`);
-          } else {
-            parts.push(`ℹ️ Vision skipped (${useModel.name} rejected the request — ${resp.status}). Local analysis above is complete.`);
+          if (!resp.ok) {
+            parts.push(`ℹ️ Vision ${useModel.name} failed (${resp.status}) — trying next.`);
+            continue;
           }
+          const data = await resp.json();
+          const desc = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+          if (desc.trim()) {
+            parts.push(`👁️ Vision (${useModel.name}):\n${desc.trim()}`);
+            okResp = true;
+            break;
+          }
+          /* e.g. minimax thinking models return empty content on images → skip */
+          parts.push(`ℹ️ Vision ${useModel.name} returned empty text — trying next.`);
+        } catch (e) {
+          parts.push(`ℹ️ Vision ${useModel.name} error (${e.message.slice(0, 80)}) — trying next.`);
         }
       }
     } catch (e) {
@@ -839,7 +856,7 @@ AVAILABLE TOOLSET — use freely:
 7. bash(command, cwd) — run ANY shell command (git, node, python3, npm, pkg, ls, cat, mkdir, cp, curl, etc). Use it to build, run, test, install, move files, anything. Default cwd = the working root.
 8. web_search(query, max_age_days) — search the web for up-to-date facts, news, prices, docs (no key needed)
 9. web_fetch(url) — read the full text of any web page (articles, docs, pages from web_search)
-10. view_image(path, lang, prompt) — view/describe images: tesseract OCR + local colour/shape analysis, AND real vision via the VL model — it can return EXACT hex colours, section-by-section layout, or even a full ready-to-use HTML page. When the user says 'make a website/page like this image/photo/screenshot', pass a prompt asking for a COMPLETE HTML page that recreates it (exact hex colours, same sections and Arabic/English text), then write that HTML to a file. Works on ANY model thanks to the built-in VL fallback.
+10. view_image(path, lang, prompt) — view/describe ANY image (website page, app screen, tool/gadget UI, desktop program, dashboard, poster/mockup): real vision returns WHAT it shows + exact hex colours + section layout + interactive elements, and if it looks like a web page it returns a COMPLETE ready-to-use HTML page. Use it first when the user says 'make/build/create something like this image' — the image may be a site, an app, a tool, or a program, so describe it as what it really is and build the matching thing.
 11. ask_question(question, options) — ask the user a picker question when a wrong guess would waste real effort
 
 DECISION RULES (how to pick the right tools):
@@ -848,7 +865,7 @@ DECISION RULES (how to pick the right tools):
 - To know what's on disk → list_dir/read_file/glob/grep.
 - To run/verify/build → bash.
 - Images, screenshots, photos, diagrams, or any picture file → view_image(path) to OCR + describe it.
-- The user wants a website/page/design that matches an image (screenshot/photo/design) → view_image(path, prompt='Output a SINGLE COMPLETE HTML page that exactly recreates this image — exact hex colours, same layout/sections, same Arabic+English text') to get the ready HTML, then write it as a file and verify.
+- The user wants to recreate ANYTHING that matches an image (website, app screen, tool/gadget UI, desktop program, dashboard, poster) → call view_image(path) FIRST to see exactly what the image shows and get the exact hex colours + full design spec (and ready HTML if it is a web page), then build the matching thing (website/app/script/UI) with those exact colours and layout. The image is NOT always a website — identify what it really is before building.
 
 GROUND RULES:
 - Resolve relative paths from the working root; absolute paths anywhere are allowed.

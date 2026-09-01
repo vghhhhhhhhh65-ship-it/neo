@@ -1,7 +1,7 @@
 {
   "name": "neo-agent",
-  "version": "1.12.0",
-  "description": "NEO Agent - AI coding assistant (terminal TUI + web UI) with Qwen3 VL vision model, DeepSeek V4 & real image-to-HTML rebuild",
+  "version": "1.13.0",
+  "description": "NEO Agent - AI coding assistant (terminal TUI + web UI) with MiniMax M2.7 free, vision image-to-app/tool/website rebuild & generic design prompts",
   "main": "bin/neo.js",
   "bin": {
     "neo": "bin/neo.js"
