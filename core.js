@@ -24,6 +24,7 @@ const getApiKey = () => (API_KEY ? API_KEY.slice(0, 4) + '…' + API_KEY.slice(-
    request but are text-only and only say "cannot see images"/reason).
    codestral/devstral are code-only and refuse images. */
 const MODELS = [
+  { id: 'qwen/qwen3-vl-plus:free', name: 'Qwen3 VL Plus Free', api: 'xkiro', tag: 'xkiro · vision 🖼 · free · سريع', ctx: 131072, vision: true },
   { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', api: 'xkiro', tag: 'xkiro · 1M ctx', ctx: 1048576 },
   { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
   { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
@@ -339,19 +340,22 @@ ${grid}`);
       parts.push(`⚠️ Visual analysis failed: ${e.message}`);
     }
 
-    /* ── Part 3: Vision API — ONLY if the actively selected model is
-       vision-capable and its endpoint responds. Short timeout; any
-       failure is reported and skipped (never hangs the agent). ── */
+    /* ── Part 3: Vision API — send the REAL image to a vision-capable
+       model. Prefer the active model if it is vision-capable; otherwise
+       fall back to the built-in free VL model. Any failure is reported
+       and skipped (never hangs the agent). ── */
     try {
       const currentModel = MODELS.find((m) => m.id === MODEL);
-      const useModel = (currentModel && currentModel.vision) ? currentModel : null;
+      const useModel = (currentModel && currentModel.vision)
+        ? currentModel
+        : (MODELS.find((m) => m.id === 'qwen/qwen3-vl-plus:free') || MODELS.find((m) => m && m.vision));
       if (useModel) {
         const ep = endpointOf(useModel.id);
         if (ep && ep.key) {
           const imgBuf = await fsp.readFile(imgPath);
           const b64 = imgBuf.toString('base64');
           const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.tiff': 'image/tiff' }[ext] || 'image/jpeg';
-          const prompt = args.prompt || 'Describe this image in detail: colours, shapes, layout, content, visible text.';
+          const prompt = args.prompt || 'Describe this image in FULL detail so any developer can recreate it EXACTLY in a website: page background hex, section-by-section layout top-to-bottom, every text with its hex colour, buttons/CTAs with hex, cards, toggles, spacing. List precise hex values, then if it looks like a web page/app UI, include a SINGLE COMPLETE HTML page (with <style>) that reproduces it exactly.';
           const resp = await fetch(`${ep.base}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
@@ -367,7 +371,7 @@ ${grid}`);
               max_tokens: 2048,
               temperature: 0.3,
             }),
-            signal: AbortSignal.timeout(20000),
+            signal: AbortSignal.timeout(120000),
           });
           if (resp.ok) {
             const data = await resp.json();
@@ -835,7 +839,7 @@ AVAILABLE TOOLSET — use freely:
 7. bash(command, cwd) — run ANY shell command (git, node, python3, npm, pkg, ls, cat, mkdir, cp, curl, etc). Use it to build, run, test, install, move files, anything. Default cwd = the working root.
 8. web_search(query, max_age_days) — search the web for up-to-date facts, news, prices, docs (no key needed)
 9. web_fetch(url) — read the full text of any web page (articles, docs, pages from web_search)
-10. view_image(path, lang, prompt) — view/describe images FAST: tesseract OCR extracts text AND local analysis (no vision model needed) reports dominant colours, brightness, layout orientation, and a 4x4 colour map so you can accurately describe shapes/colours of the whole image. Use this whenever the user asks you to look at, describe, or read an image file.
+10. view_image(path, lang, prompt) — view/describe images: tesseract OCR + local colour/shape analysis, AND real vision via the VL model — it can return EXACT hex colours, section-by-section layout, or even a full ready-to-use HTML page. When the user says 'make a website/page like this image/photo/screenshot', pass a prompt asking for a COMPLETE HTML page that recreates it (exact hex colours, same sections and Arabic/English text), then write that HTML to a file. Works on ANY model thanks to the built-in VL fallback.
 11. ask_question(question, options) — ask the user a picker question when a wrong guess would waste real effort
 
 DECISION RULES (how to pick the right tools):
@@ -844,6 +848,7 @@ DECISION RULES (how to pick the right tools):
 - To know what's on disk → list_dir/read_file/glob/grep.
 - To run/verify/build → bash.
 - Images, screenshots, photos, diagrams, or any picture file → view_image(path) to OCR + describe it.
+- The user wants a website/page/design that matches an image (screenshot/photo/design) → view_image(path, prompt='Output a SINGLE COMPLETE HTML page that exactly recreates this image — exact hex colours, same layout/sections, same Arabic+English text') to get the ready HTML, then write it as a file and verify.
 
 GROUND RULES:
 - Resolve relative paths from the working root; absolute paths anywhere are allowed.
@@ -893,10 +898,14 @@ reloadPrompt();
 /* ────────────────────────────── MODEL CALL ────────────────────────────── */
 
 const CALL_TRIES = Math.max(1, Number(process.env.NEO_CALL_RETRY || 3) || 3);
-const RETRY_DELAY = [1500, 4000, 9000];
+const RETRY_DELAY = [1000, 2500, 5000];
 
 /* transient failures worth retrying — network hiccups, server 5xx, rate limits */
 const isRetryable = (code) => (code >= 500 || code === 429 || code === 408 || code === 409);
+/* tokenrouter cache-only free models reject COLD (uncached) requests with
+   503 cacheonlycold — these are NOT worth slow back-off; retry fast. */
+const isCacheOnlyCold = (code, errText) =>
+  code === 503 && /cache.?only|cold|admission|cacheonlycold/i.test(errText || '');
 const isNetworkErr = (e) =>
   !(e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) &&
   (/fetch failed|ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|network|read ECONNABORTED|UND_ERR/i.test(e && e.message ? String(e.message) + ' ' + String(e.cause && e.cause.message || '') : ''));
@@ -922,7 +931,7 @@ async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) 
           ...(toolDefs && toolDefs.length ? { tools: toolDefs, tool_choice: 'auto' } : {}),
           stream: true,
           stream_options: { include_usage: true },
-          max_tokens: 65000,
+          max_tokens: Number(process.env.NEO_MAX_TOKENS || 8192),
           temperature: 0.35,
         }),
         signal: controller.signal,
@@ -952,7 +961,7 @@ async function callModel(messages, onDelta, signal, toolDefs = toolDefinitions) 
     /* watchdog: a fetch stream that stops sending bytes (mobile / flaky
        network) would otherwise hang the agent forever with the spinner —
        abort after STREAM_STALL_MS of total silence. */
-    const STREAM_STALL_MS = Number(process.env.NEO_STREAM_TIMEOUT || 60000);
+    const STREAM_STALL_MS = Number(process.env.NEO_STREAM_TIMEOUT || 45000);
     let lastChunk = Date.now();
     let stallReason = null;
     const stallTimer = setInterval(() => {
