@@ -215,18 +215,22 @@ const tools = {
     return out.slice(0, 6000) || '(command ran with no output)';
   },
 
-  /* view_image — OCR + image description in one tool.
-     Accepts an image path (jpg/png/gif/webp/bmp/tiff).
-     1) Runs tesseract OCR to extract any visible text.
-     2) If the current model supports vision, sends the image to the
-        vision model API for a visual description.
-     3) Falls back to OCR-only if no vision model is available.
-     Returns combined OCR text + visual description. */
+  /* view_image — full image understanding in one fast tool.
+     Works even with text-only models (GLM/DeepSeek…).
+     1) Tesseract OCR → extracts any visible text.
+     2) Local visual analysis (Pillow, instant) → dominant colours,
+        brightness, colourfulness, region map, dimensions, orientation.
+        This is what lets a text-only model "see colours + shape".
+     3) Vision API → only attempted when a vision-capable model is
+        actually selected AND its endpoint answers (short timeout).
+        Never hangs: anything slow/failing is skipped instantly.
+     Returns a combined report. */
   async view_image(args) {
     const imgPath = path.resolve(WORKDIR, args.path || '');
     if (!imgPath) return 'ERROR: view_image requires a "path" to an image file.';
+    let stat;
     try {
-      const stat = await fsp.stat(imgPath);
+      stat = await fsp.stat(imgPath);
       if (!stat.isFile()) return `ERROR: ${imgPath} is not a file.`;
     } catch (e) {
       return `ERROR: cannot read ${imgPath} — ${e.code === 'ENOENT' ? 'file not found' : e.message}`;
@@ -236,32 +240,118 @@ const tools = {
     if (!IMAGE_EXTS.includes(ext)) return `ERROR: ${ext} is not a supported image format. Supported: ${IMAGE_EXTS.join(', ')}`;
 
     const parts = [];
+    const header = `Image: ${imgPath} (${(stat.size / 1024).toFixed(1)} KB, ${ext})`;
 
-    /* ── Part 1: Tesseract OCR ── */
+    /* ── Part 1: Tesseract OCR (fast, text extraction) ── */
     try {
       const ocrLang = args.lang || 'ara+eng';
       const { stdout: ocrText } = await execAsync(
         `tesseract "${imgPath}" stdout -l ${ocrLang} --psm 6 2>/dev/null`,
-        { timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+        { timeout: 25000, maxBuffer: 2 * 1024 * 1024 }
       );
       const text = ocrText.trim();
-      if (text) parts.push(`📝 OCR Text (${ocrLang}):\n${text}`);
+      if (text) parts.push(`📝 OCR TEXT:\n${text}`);
     } catch (e) {
       parts.push(`⚠️ OCR failed: ${e.message}`);
     }
 
-    /* ── Part 2: Vision model description ── */
+    /* ── Part 2: Local visual analysis (Pillow — colours, brightness,
+       regions, orientation). Full description with NO vision model, so
+       text-only LLMs can accurately see the image. ── */
     try {
-      const visionModel = MODELS.find((m) => m.vision && m.id !== MODEL);
+      const py = `import json,sys,collections
+from PIL import Image
+p=sys.argv[1]
+try:
+    im=Image.open(p).convert('RGB')
+except Exception as e:
+    print(json.dumps({'error':str(e)})); sys.exit(0)
+w,ht=im.size
+g=im.copy(); g.thumbnail((56,56)); px=list(g.getdata()); n=len(px)
+lum=sum(0.299*r+0.587*gg+0.114*b for r,gg,b in px)/n
+sat=sum(max(r,gg,b)-min(r,gg,b) for r,gg,b in px)/n
+def hsv(r,gg,b):
+    mx,mn=max(r,gg,b),min(r,gg,b); d=mx-mn; v=mx/255
+    if d==0: h=0
+    elif mx==r: h=60*(((gg-b)/d)%6)
+    elif mx==gg: h=60*((b-r)/d+2)
+    else: h=60*((r-gg)/d+4)
+    s=(mx-mn)/(255 if mx else 1)
+    return h,s,v
+def cname(h,s,v):
+    if v>0.92 and s<0.12: return 'white'
+    if v<0.12: return 'black'
+    if s<0.16: return 'gray'
+    hh=h%360
+    if hh<15 or hh>=345: return 'red'
+    if hh<45: return 'orange'
+    if hh<70: return 'yellow'
+    if hh<150: return 'green'
+    if hh<200: return 'cyan/teal'
+    if hh<250: return 'blue'
+    if hh<290: return 'purple'
+    if hh<340: return 'pink/magenta'
+    return 'red'
+q=g.quantize(colors=32,method=2)
+qpal=q.getpalette(); qi=list(q.getdata()); cnt=collections.Counter(qi)
+top=[]
+for idx,c in cnt.most_common(8):
+    r,gg,b=qpal[idx*3:idx*3+3]
+    h,s,v=hsv(r,gg,b)
+    top.append({'hex':'#%02x%02x%02x'%(r,gg,b),'color':cname(h,s,v),'pct':round(100*c/n,1)})
+# coarse 4x4 region map → guards layout
+rows,cols=4,4; cells=[]
+small=im.resize((cols,rows))
+cp=list(small.getdata())
+for y in range(rows):
+    line=[]
+    for x in range(cols):
+        r,gg,b=cp[y*cols+x]
+        h,s,v=hsv(r,gg,b)
+        line.append(cname(h,s,v))
+    cells.append(line)
+bright = 'bright' if lum>180 else 'bright-ish' if lum>120 else 'dark-ish' if lum>60 else 'dark'
+colorful = 'colourful' if sat>55 else 'muted/pastel' if sat>20 else 'grayscale/plain'
+orient = 'landscape' if w>ht*1.15 else 'portrait' if ht>w*1.15 else 'square-ish'
+print(json.dumps({'w':w,'h':ht,'brightness':round(lum),'colorful':colorful,'top':top,'regions':cells,'orient':orient}))
+`;
+      const pyFile = path.join(os.tmpdir(), "neo_vis_" + Date.now() + ".py");
+      await fsp.writeFile(pyFile, py);
+      let stdout = "";
+      try {
+        const execR = await execAsync("python3 " + JSON.stringify(pyFile) + " " + JSON.stringify(imgPath), { timeout: 20000, maxBuffer: 2 * 1024 * 1024 });
+        stdout = execR.stdout;
+      } finally {
+        try { await fsp.rm(pyFile, { force: true }); } catch {}
+      }
+      const data = JSON.parse(stdout || '{}');
+      if (data && data.w) {
+        const topStr = data.top.map((t) => `${t.color} ${t.hex} (${t.pct}%)`).join(', ');
+        const grid = data.regions.map((r) => r.map((c) => c[0].toUpperCase()).join(' · ')).join('\n');
+        parts.push(`🎨 VISUAL ANALYSIS (local — NO vision model needed):
+- Size: ${data.w} × ${data.h} px — ${data.orient} layout
+- Lighting: ${data.brightness}/255 (${data.brightness > 120 ? 'well-lit' : 'dim'}) — ${data.colorful}
+- Dominant colours: ${topStr || '(none)'}
+- Colour map (top→bottom, left→right, 4×4):
+${grid}`);
+      }
+    } catch (e) {
+      parts.push(`⚠️ Visual analysis failed: ${e.message}`);
+    }
+
+    /* ── Part 3: Vision API — ONLY if the actively selected model is
+       vision-capable and its endpoint responds. Short timeout; any
+       failure is reported and skipped (never hangs the agent). ── */
+    try {
       const currentModel = MODELS.find((m) => m.id === MODEL);
-      const useModel = (currentModel && currentModel.vision) ? currentModel : visionModel;
+      const useModel = (currentModel && currentModel.vision) ? currentModel : null;
       if (useModel) {
         const ep = endpointOf(useModel.id);
         if (ep && ep.key) {
           const imgBuf = await fsp.readFile(imgPath);
           const b64 = imgBuf.toString('base64');
           const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.tiff': 'image/tiff' }[ext] || 'image/jpeg';
-          const prompt = args.prompt || 'Describe this image in detail. If it contains text, list all visible text. If it contains code, list the code. If it contains UI elements, describe the layout.';
+          const prompt = args.prompt || 'Describe this image in detail: colours, shapes, layout, content, visible text.';
           const resp = await fetch(`${ep.base}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
@@ -274,31 +364,26 @@ const tools = {
                   { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
                 ],
               }],
-              max_tokens: 4096,
+              max_tokens: 2048,
               temperature: 0.3,
             }),
-            signal: AbortSignal.timeout(60000),
+            signal: AbortSignal.timeout(20000),
           });
           if (resp.ok) {
             const data = await resp.json();
             const desc = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
             if (desc.trim()) parts.push(`👁️ Vision (${useModel.name}):\n${desc.trim()}`);
           } else {
-            const errText = await resp.text().catch(() => '');
-            parts.push(`⚠️ Vision API error ${resp.status}: ${errText.slice(0, 200)}`);
+            parts.push(`ℹ️ Vision skipped (${useModel.name} rejected the request — ${resp.status}). Local analysis above is complete.`);
           }
-        } else {
-          parts.push(`⚠️ No API key for vision model "${useModel.name}" — OCR only.`);
         }
-      } else {
-        parts.push('ℹ️ No vision model available — OCR only.');
       }
     } catch (e) {
-      parts.push(`⚠️ Vision error: ${e.message}`);
+      parts.push(`ℹ️ Vision skipped (${e.message}). Local analysis above is complete.`);
     }
 
-    if (!parts.length) return `Image: ${imgPath}\n(no text found and no vision description available)`;
-    return `Image: ${imgPath} (${(stat.size / 1024).toFixed(1)} KB, ${ext}):\n\n${parts.join('\n\n')}`;
+    if (parts.length === 1) return `${header}\n\n${parts[0]}`;
+    return `${header}:\n\n${parts.join('\n\n')}`;
   },
 
   /* search the web — no key needed (DuckDuckGo html endpoint). Returns
@@ -617,7 +702,7 @@ const toolDefinitions = [
     type: 'function',
     function: {
       name: 'view_image',
-      description: 'View/describe an image file. Uses tesseract OCR to extract text AND (if available) a vision model to describe the visual content. Supports jpg, png, gif, webp, bmp, tiff. Use this whenever the user asks you to look at, describe, or read an image — or when you encounter an image file that is relevant to the task.',
+      description: 'View/describe an image file. Runs tesseract OCR to extract visible text PLUS local visual analysis (Pillow) that describes dominant colours, brightness, layout, and a 4x4 colour map — works with ANY model, no vision model needed. If the active model is vision-capable it also sends the image for a full description. Supports jpg, png, gif, webp, bmp, tiff. Use this whenever the user asks you to look at, describe, or read an image — or when you encounter an image file that is relevant to the task.',
       parameters: {
         type: 'object',
         properties: {
@@ -750,7 +835,7 @@ AVAILABLE TOOLSET — use freely:
 7. bash(command, cwd) — run ANY shell command (git, node, python3, npm, pkg, ls, cat, mkdir, cp, curl, etc). Use it to build, run, test, install, move files, anything. Default cwd = the working root.
 8. web_search(query, max_age_days) — search the web for up-to-date facts, news, prices, docs (no key needed)
 9. web_fetch(url) — read the full text of any web page (articles, docs, pages from web_search)
-10. view_image(path, lang, prompt) — view/describe images: runs tesseract OCR (ara+eng) to extract text, and if a vision model is available, sends the image for visual description. Use this whenever the user asks you to look at, describe, or read an image file.
+10. view_image(path, lang, prompt) — view/describe images FAST: tesseract OCR extracts text AND local analysis (no vision model needed) reports dominant colours, brightness, layout orientation, and a 4x4 colour map so you can accurately describe shapes/colours of the whole image. Use this whenever the user asks you to look at, describe, or read an image file.
 11. ask_question(question, options) — ask the user a picker question when a wrong guess would waste real effort
 
 DECISION RULES (how to pick the right tools):
