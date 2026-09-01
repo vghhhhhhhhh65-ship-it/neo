@@ -1,7 +1,7 @@
 {
   "name": "neo-agent",
-  "version": "1.8.6",
-  "description": "NEO Agent - AI coding assistant (terminal TUI + web UI) with DeepSeek V4 Pro",
+  "version": "1.10.0",
+  "description": "NEO Agent - AI coding assistant (terminal TUI + web UI) with GLM 5.3, DeepSeek V4 Pro & vision/image tools",
   "main": "bin/neo.js",
   "bin": {
     "neo": "bin/neo.js"

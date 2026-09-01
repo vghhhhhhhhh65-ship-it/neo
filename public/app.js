@@ -142,7 +142,7 @@ function appendNote(text) {
 function addToolCard(ev) {
   const card = document.createElement('div');
   card.className = 'tool-card running';
-  const icon = { read_file: '📖', write_file: '✍️', edit_file: '🔧', list_dir: '📂', glob: '🔍', grep: '🔎', bash: '⚡' }[ev.name] || '🛠️';
+  const icon = { read_file: '📖', write_file: '✍️', edit_file: '🔧', list_dir: '📂', glob: '🔍', grep: '🔎', bash: '⚡', view_image: '🖼️', web_search: '🌐', web_fetch: '📄', ask_question: '❓', todo_update: '✅' }[ev.name] || '🛠️';
   const args = Object.entries(ev.args || {})
     .slice(0, 2)
     .map(([k, v]) => {

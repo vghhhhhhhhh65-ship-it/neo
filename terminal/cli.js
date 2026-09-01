@@ -34,6 +34,12 @@ let tokensUsage = { prompt: 0, completion: 0, total: 0 };
 
 let BUSY = false; // model is working → input frame shows "⏹ esc" hint
 
+/* full-screen page currently open (question picker / models / sessions /
+   pageForm / welcome). When the terminal resizes (soft keyboard hides on the
+   phone, window changes…) we must re-draw THIS page — NOT paint() — otherwise
+   the interactive dialog vanishes mid-choice. */
+let activeDraw = null;
+
 let statusTimer = null;
 let statusFrame = 0;
 let statusPrefix = '';
@@ -152,11 +158,11 @@ function rebuildLog() {
       for (let i = 0; i < sp.padTop; i++) LOG.push('');
       const artW = wlen(SPLASH_ART[0]);
       const cx = (s) => ' '.repeat(Math.max(0, Math.floor((COL() - wlen(stripAnsi(s))) / 2)));
-      SPLASH_ART.forEach((line, i) => {
-        const cc = i < 2 ? C.art2 : i < 4 ? C.art1 : C.art3;
-        LOG.push(cx(cc + line) + cc + C.bold + line + C.n);
-      });
-      LOG.push(cx(C.dimt + '· · ·  C O D I N G   A G E N T  · · ·') + C.dimt + '· · ·  C O D I N G   A G E N T  · · ·' + C.n);
+SPLASH_ART.forEach((line, i) => {
+          const cc = i < 2 ? C.art2 : i < 4 ? C.art1 : C.art3;
+          LOG.push(cx(cc + line) + cc + C.bold + line + C.n);
+        });
+        LOG.push(cx(C.dimt + '· · ·  A I   A S S I S T A N T  · · ·') + C.dimt + '· · ·  A I   A S S I S T A N T  · · ·' + C.n);
       const key = getApiKey() ? C.green + '🔑 مضبوط' + C.n : C.red + '🔑 بدون مفتاح — /apikey' + C.n;
       const chips = C.dimt + modelName() + C.n + '  ·  ' + C.dimt + themeName() + C.n + '  ·  ' + modeColor() + modeKey() + C.n + '  ·  ' + key;
       LOG.push(cx(chips) + chips);
@@ -250,7 +256,7 @@ function elapsedFmt() {
 
 function footerLine() {
   const CW = Math.max(8, COL() - 1);
-  const left = statusPrefix ? statusColor + (statusTimer ? SPINNERS[statusFrame % SPINNERS.length] + ' ' : '') + statusPrefix + C.n : C.gray + 'CWD' + C.n + '  ' + C.text + WORKDIR + C.n;
+  const left = statusPrefix ? statusColor + (statusTimer ? SPINNERS[statusFrame % SPINNERS.length] + ' ' : '') + statusPrefix + C.n : C.text + C.bold + '✦' + C.n + ' ' + C.dimt + ' NEO ' + C.n + '  ' + C.text + WORKDIR + C.n;
   const intr = BUSY ? '  ' + C.amber + C.bold + 'ESC' + C.n + C.amber + ' إيقاف' + C.n : '';
   const usage = ' ' + C.border + '▣' + C.n + '  ' + C.dimt + (tokensUsage.total ? fmt(tokensUsage.total) + ' / ' + fmt(modelCtxLimit()) + ' (' + Math.round(tokensUsage.total / modelCtxLimit() * 100) + '%)' : '0 / ' + fmt(modelCtxLimit()) + ' (0%)') + C.n;
   const pal = C.text + C.bold + 'ctrl+p' + C.n + ' ' + C.dimt + 'commands' + C.n;
@@ -487,7 +493,7 @@ function endStream() {
 }
 
 /* ── inline tools (icon + label; matched by id like opencode) */
-const INLINE_ICON = { read_file: '→', write_file: '←', edit_file: '←', list_dir: '→', glob: '✱', grep: '✱', bash: '$' };
+const INLINE_ICON = { read_file: '→', write_file: '←', edit_file: '←', list_dir: '→', glob: '✱', grep: '✱', bash: '$', web_search: '🌐', web_fetch: '🔗' };
 
 function toolHeading(ev) {
   const icon = INLINE_ICON[ev.name] || '⚙';
@@ -732,18 +738,24 @@ async function pickPage(title, items, opts = {}) {
     pagePaint(rows);
   };
   draw();
-  const picked = await editor.readPicker((tok) => {
-    if (tok === ESC || tok === 'q' || tok === 'Q') { editor.finishPicker(null); return true; }
-    if (tok.length === 1 && tok >= '1' && tok <= '9') {
-      const i = Number(tok) - 1;
-      if (items[i]) { editor.finishPicker(items[i]); return true; }
-    }
-    if (tok === ARROW_UP) { sel = (sel + items.length - 1) % items.length; draw(); return true; }
-    if (tok === ARROW_DOWN) { sel = sel + 1 >= items.length ? 0 : sel + 1; draw(); return true; }
-    if (tok === '\r' || tok === '\n') { editor.finishPicker(items[sel]); return true; }
-    if (opts.onKey) return opts.onKey(tok) === true;
-    return true;
-  });
+  activeDraw = draw;
+  let picked;
+  try {
+    picked = await editor.readPicker((tok) => {
+      if (tok === ESC || tok === 'q' || tok === 'Q') { editor.finishPicker(null); return true; }
+      if (tok.length === 1 && tok >= '1' && tok <= '9') {
+        const i = Number(tok) - 1;
+        if (items[i]) { editor.finishPicker(items[i]); return true; }
+      }
+      if (tok === ARROW_UP) { sel = (sel + items.length - 1) % items.length; draw(); return true; }
+      if (tok === ARROW_DOWN) { sel = sel + 1 >= items.length ? 0 : sel + 1; draw(); return true; }
+      if (tok === '\r' || tok === '\n') { editor.finishPicker(items[sel]); return true; }
+      if (opts.onKey) return opts.onKey(tok) === true;
+      return true;
+    });
+  } finally {
+    activeDraw = null;
+  }
   restoreScreen();
   return picked ? picked.value : null;
 }
@@ -754,6 +766,7 @@ async function pickPage(title, items, opts = {}) {
    bare Enter on a free-text option = dismiss → agent proceeds on its own. ── */
 async function showQuestionPage(ev) {
   stopInterruptWatcher();
+  dropStatusTimer(); // kill the tool's 80ms status spinner so it can't scribble over the page below
   const items = ev.options.map((o) => ({ value: o.value, label: o.label, desc: '' }));
   items.push({ value: '__custom__', label: '✍️ اكتب إجابة بنفسك…', desc: 'رأي حر — أكتبه' });
   const title = truncateFmt('❓ ' + ev.question, Math.max(10, COL() - 6));
@@ -798,23 +811,29 @@ async function pageForm(opts) {
     pagePaint(rows);
   };
   draw();
-  const done = await editor.readPicker((tok) => {
-    const f = fields[focus];
-    if (tok === ESC || tok === '\x03') { editor.finishPicker(null); return true; }
-    if (tok === ARROW_UP) { focus = (focus + fields.length - 1) % fields.length; draw(); return true; }
-    if (tok === ARROW_DOWN) { focus = (focus + 1) % fields.length; draw(); return true; }
-    if (tok === '\r' || tok === '\n') {
-      if (focus === fields.length - 1) { editor.finishPicker({ ...values }); return true; }
-      focus++; draw(); return true;
-    }
-    if (tok === '\x7f' || tok === '\b') { if (values[f.key]) values[f.key] = values[f.key].slice(0, -1); draw(); return true; }
-    if (opts.onKey) { const r = opts.onKey(tok); if (r === true) return true; }
-    if (tok.length === 1 && tok >= ' ' && tok.charCodeAt(0) !== 27) {
-      const cur = values[f.key] || '';
-      if (cur.length < 300) { values[f.key] = cur + tok; draw(); }
-    }
-    return true;
-  });
+  activeDraw = draw;
+  let done;
+  try {
+    done = await editor.readPicker((tok) => {
+      const f = fields[focus];
+      if (tok === ESC || tok === '\x03') { editor.finishPicker(null); return true; }
+      if (tok === ARROW_UP) { focus = (focus + fields.length - 1) % fields.length; draw(); return true; }
+      if (tok === ARROW_DOWN) { focus = (focus + 1) % fields.length; draw(); return true; }
+      if (tok === '\r' || tok === '\n') {
+        if (focus === fields.length - 1) { editor.finishPicker({ ...values }); return true; }
+        focus++; draw(); return true;
+      }
+      if (tok === '\x7f' || tok === '\b') { if (values[f.key]) values[f.key] = values[f.key].slice(0, -1); draw(); return true; }
+      if (opts.onKey) { const r = opts.onKey(tok); if (r === true) return true; }
+      if (tok.length === 1 && tok >= ' ' && tok.charCodeAt(0) !== 27) {
+        const cur = values[f.key] || '';
+        if (cur.length < 300) { values[f.key] = cur + tok; draw(); }
+      }
+      return true;
+    });
+  } finally {
+    activeDraw = null;
+  }
   restoreScreen();
   return done;
 }
@@ -895,7 +914,7 @@ async function showModels() {
   const known = MODELS.map((m) => ({
     value: m.id,
     label: m.name,
-    desc: (m.id === modelName() ? '(active)' : m.tag) + (m.id === modelName() && m.tag ? ' · ' + m.tag : ''),
+    desc: (m.id === modelName() ? '(active)' : m.tag) + (m.id === modelName() && m.tag ? ' · ' + m.tag : '') + (m.vision ? ' · 🖼 يدعم صور' : ''),
   }));
   const custom = !MODELS.some((m) => m.id === modelName())
     ? [{ value: modelName(), label: modelName(), desc: '(مزوّد خارجي مخصص)' }]
@@ -965,6 +984,10 @@ const COMMANDS = [
   { value: '/prompt', label: '/prompt', desc: 'ملف البرومت · نحّي نظام NEO لموضوعك' },
   { value: '/info', label: '/info', desc: 'تفاصيل الجلسة' },
   { value: '/update', label: '/update', desc: 'التحقق من التحديث · الترقية التلقائية' },
+  { value: '/img', label: '/img', desc: 'إرفاق صورة وسؤال علاج يدعم الرؤية:  /img <مسار> سؤال' },
+  { value: '/copy', label: '/copy', desc: 'نسخ آخر رد إلى الحافظة' },
+  { value: '/save', label: '/save', desc: 'تصدير المحادثة إلى ملف markdown' },
+  { value: '/time', label: '/time', desc: 'عرض الوقت والتاريخ بالعربي' },
   { value: '/help', label: '/help', desc: 'مساعدة واختصارات' },
   { value: '/web', label: '/web', desc: 'تشغيل neo web' },
   { value: '/exit', label: '/exit', desc: 'إنهاء البرنامج' },
@@ -1032,7 +1055,17 @@ function paletteEnter() {
   const typed = '/' + (palette.q || '');
   const it = palette.items.length ? (palette.items[palette.sel] || palette.items[0]) : null;
   const multi = palette.items.length === 1 && typed.split(/\s+/).length > 1 && it && it.value.split(' ')[0] === typed.split(' ')[0];
+  /* commands with arguments (e.g. "/img /path/to.jpg …", "/theme name"): even
+     when the full query doesn't match any palette row (so we have no item to
+     resolve), if the first token is a known command we must run the whole
+     typed command — otherwise the palette swallows commands that carry args. */
+  const firstTok = typed.split(/\s+/)[0];
+  const isKnownCmd = COMMANDS.some((c) => c.value === firstTok);
   palette = null;
+  if (!it && isKnownCmd && typed !== firstTok) {
+    editor.resolveValue(typed);
+    return true;
+  }
   if (!it) {
     // no matching command → consume Enter, clear the "/…" draft, stay put
     editor.buf = ''; editor.pos = 0;
@@ -1190,7 +1223,16 @@ function messages() {
   const out = [];
   for (const m of MSGS) {
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.text });
+      // if this user message carries an attached image, send OpenAI-style
+      // multimodal content so vision-capable models can actually see it
+      if (m.attach) {
+        const parts = [];
+        if (m.text) parts.push({ type: 'text', text: m.text });
+        parts.push({ type: 'image_url', image_url: { url: 'data:' + (m.attach.mime || 'image/jpeg') + ';base64,' + m.attach.data } });
+        out.push({ role: 'user', content: parts });
+      } else {
+        out.push({ role: 'user', content: m.text });
+      }
     } else if (m.role === 'assistant') {
       const content = m.parts
         .filter((p) => p.type === 'text')
@@ -1234,6 +1276,38 @@ async function manualCompact() {
   }
 }
 
+/* ── /copy /save /time helpers ── */
+function lastAssistantText() {
+  for (let i = MSGS.length - 1; i >= 0; i--) {
+    const m = MSGS[i];
+    if (m.role === 'assistant') {
+      const parts = (m.parts || []).filter((p) => p.type === 'text');
+      return parts.map((p) => p.text).join('\n\n').trim() || '';
+    }
+  }
+  return '';
+}
+function exportMarkdown() {
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const lines = ['# NEO conversation · ' + now, ''];
+  for (const m of MSGS) {
+    if (m.role === 'user') { lines.push('## You', '', String(m.text), ''); continue; }
+    if (m.role !== 'assistant') continue;
+    for (const p of (m.parts || [])) {
+      if (p.type === 'text') { lines.push('## NEO', '', String(p.text), ''); }
+      else if (p.type === 'tool' && !p.pending) {
+        lines.push('### ' + (p.icon || '') + ' ' + (p.label || '').replace(/^[^\s]+\s+/, ''), '', String(p.output || '').slice(0, 1000), '');
+      } else if (p.type === 'todo') { lines.push('- [' + (p.status === 'completed' ? 'x' : ' ') + '] ' + p.content); }
+    }
+  }
+  return lines.join('\n');
+}
+function formatTime() {
+  const d = new Date();
+  const parts = d.toLocaleString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).split('،').map((s) => s.trim());
+  return '⏰ الوقت الحالي:\n- ' + parts.join('\n- ');
+}
+
 async function handleCommand(cmd) {
   const bare = cmd.trim().split(/\s+/)[0];
   const rest = cmd.trim().slice(bare.length).trim();
@@ -1241,7 +1315,7 @@ async function handleCommand(cmd) {
     const a = ensureAssistant();
     a.parts.push({
       type: 'text',
-      text: '/help   مساعدة واختصارات\n/model   كل النماذج تعمل — اختر من قائمة واحدة (xkiro + oc مجاناً)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir',
+      text: '/help   مساعدة واختصارات\n/model   كل النماذج تعمل — اختر من قائمة واحدة (xkiro + oc مجاناً)\n/apikey  إعداد مفتاح API — xkiro.com/dashboard/api/keys\n/compact ضغط الذاكرة يدوياً إلى ملخص أقسام (أو تلقائياً عند الاقتراب من الحد)\n/setup  إعادة صفحة الإعداد (مفتاح أو مزوّد خارجي)\n/plan    وضع الخطة — يخطّط + TODO بدون تنفيذ (أصفر)\n/build   وضع التنفيذ — ينفّذ فوراً (بنفسجي)\n/session  المحادثات · فتح قديمة أو جديدة\n/theme   تبديل الثيم (يُحفظ فوراً)\n/config  إعدادات الملف config.json/.toml\n/copy    نسخ آخر رد إلى الحافظة (_TERMUX_OK)\n/save    تصدير المحادثة إلى ملف markdown في مجلد العمل\n/img    إرفاق صورة وسؤال نموذج يدعم الرؤية عنها:  /img <مسار> سؤالك\n/time   عرض الوقت والتاريخ بالعربي\n/clear   إعادة ضبط المحادثة\n/info    تفاصيل الجلسة\n/update  التحقق من التحديث · ترقية تلقائية\n/web     تشغيل neo web\n/exit    إنهاء\n\nاختصارات:\nTAB     يبدّل Build ⇄ Plan (لون الصندوق يتغيّر)\n/  تظهر قائمة الأوامر أثناء الكتابة\nctrl+p  تفتح قائمة الأوامر مباشرة\nESC   يوقف الرد فوراً ⏹ + يغلق اللوحات والحوارات\n↑ ↓   تنقل داخل القوائم والحوارات\n\nالإعدادات: ~/.neo/config.json · أو config.jsonc / config.toml\nمفاتيح: theme, mode, model, apiBase, apiKey, maxContext, workdir, promptFile',
     });
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/clear') {
@@ -1303,6 +1377,63 @@ async function handleCommand(cmd) {
     rebuildLog(); renderConv(); drawLower();
   } else if (bare === '/prompt' || bare === '/system' || bare === '/sys') {
     showPromptInfo();
+  } else if (bare === '/copy') {
+    const a = ensureAssistant();
+    const txt = lastAssistantText();
+    if (!txt) { a.parts.push({ type: 'text', text: 'لا يوجد رد حالي لنسخه.' }); rebuildLog(); renderConv(); drawLower(); return; }
+    try {
+      exec('termux-clipboard-set', (e) => {
+        if (e) { exec('echo -n ' + JSON.stringify(txt.slice(0, 5000)) + ' | xclip -selection clipboard', () => {}); }
+      });
+      a.parts.push({ type: 'text', text: '✔ تم نسخ الرد إلى الحافظة (' + txt.length + ' حرف).' });
+    } catch { a.parts.push({ type: 'text', text: '× تعذر النسخ — لا يوجد clipboard في هذا الطرفية.' }); }
+    rebuildLog(); renderConv(); drawLower();
+  } else if (bare === '/save' || bare === '/export') {
+    const txt = exportMarkdown();
+    const fp = path.join(WORKDIR, 'neo_export_' + Date.now().toString(36) + '.md');
+    try { fs.writeFileSync(fp, txt); setStatus('محفوظة → ' + fp, C.green); }
+    catch { setStatus('لم يتم الحفظ', C.red); }
+    rebuildLog(); renderConv(); drawLower();
+  } else if (bare === '/time') {
+    const a = ensureAssistant();
+    a.parts.push({ type: 'text', text: formatTime() });
+    rebuildLog(); renderConv(); drawLower();
+  } else if (bare === '/img' || bare === '/photo' || bare === '/image') {
+    const a = ensureAssistant();
+    if (!rest) {
+      a.parts.push({ type: 'text', text: 'استخدام:  /img <مسار الصورة>  [سؤالك عن الصورة…]\nمثال:  /img /storage/emulated/0/Pictures/صورتي.jpg ما محتوى هذه الصورة؟' });
+      rebuildLog(); renderConv(); drawLower();
+      return;
+    }
+    const firstSpace = rest.indexOf(' ');
+    const p = (firstSpace === -1 ? rest : rest.slice(0, firstSpace)).replace(/^['"]|['"]$/g, '').trim();
+    const question = (firstSpace === -1 ? '' : rest.slice(firstSpace + 1)).trim();
+    let data = null, mime = null;
+    try {
+      const buf = fs.readFileSync(p);
+      const ext = String(p).split('.').pop().toLowerCase();
+      mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : ext === 'bmp' ? 'image/bmp' : 'image/jpeg';
+      data = buf.toString('base64');
+    } catch (e) {
+      a.parts.push({ type: 'text', text: '✕ تعذر قراءة الصورة: ' + (e.message || p) + '\nالمسار يجب أن يكون مطلقاً مثل /storage/emulated/0/…' });
+      rebuildLog(); renderConv(); drawLower();
+      return;
+    }
+    if (data && data.length > 8000000) {
+      a.parts.push({ type: 'text', text: '✕ الصورة أكبر من 8MB — اختر صورة أصغر.' });
+      rebuildLog(); renderConv(); drawLower();
+      return;
+    }
+    const name = String(p).split('/').pop();
+    const prompt = '[شاهد الصورة المرفقة ثم أجب]' + (question ? '\n' + question : '');
+    if (!MODELS.find((x) => x.id === getModel() && x.vision)) {
+      a.parts.push({ type: 'note', text: '⚠ النموذج الحالي (' + modelName() + ') لا يدعم رؤية الصور — أُرسلت له لكنه لن يستطيع رؤيتها. اختر واحداً يدعمها: /model → Mistral Large · Mistral Small · Ministral 3B/8B/14B' });
+    }
+    MSGS.push({ role: 'user', text: prompt, attach: { path: p, data, mime, name }, color: null });
+    SCREEN = null; paint();
+    setStatus('🖼 صورة مرفقة: ' + name, C.green);
+    try { await runTurn(prompt); } catch {}
+    rebuildLog(); renderConv(); drawLower();
   } else {
     const a = ensureAssistant();
     a.parts.push({ type: 'text', text: 'آمر غير معروف → /help' });
@@ -1347,15 +1478,18 @@ async function main() {
     process.exit(0);
   });
 
-  // full repaint on terminal resize (soft keyboard, window changes) — like opencode
+  // full repaint on terminal resize (soft keyboard, window changes). If a
+  // full-screen page (question picker / models / sessions / form / welcome) is
+  // open, re-draw THAT page so it survives the resize instead of vanishing.
   process.stdout.on('resize', () => {
+    if (activeDraw) { activeDraw(); return; }
     SCREEN = null;
     paint();
   });
 
   editor.onChange = (buf) => {
     const t = buf.trim();
-    if (t.startsWith('/')) { showPalette(t.slice(1)); }
+    if (t.startsWith('/') && !t.includes(' ')) { showPalette(t.slice(1)); }
     else if (palette) closePalette();
   };
   editor.onNavDir = (dir) => paletteNav(dir);

@@ -18,7 +18,11 @@ const getApiKey = () => (API_KEY ? API_KEY.slice(0, 4) + '…' + API_KEY.slice(-
    xkiro → POST /chat/completions 200 (21 models)
    opencode zen (api:'oc') → 200 / 429 free-limit on zen/v1 (5 models)
    Paid-only (403), phantom/unpublished (-free that 401s), and 400/500
-   server-error ids were dropped — the list only shows models that answer. */
+   server-error ids were dropped — the list only shows models that answer.
+   vision:true = verified LIVE to describe the colour of a sent image
+   (mistral family reads the picture; deepseek/minimax/sensenova accept the
+   request but are text-only and only say "cannot see images"/reason).
+   codestral/devstral are code-only and refuse images. */
 const MODELS = [
   { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', api: 'xkiro', tag: 'xkiro · 1M ctx', ctx: 1048576 },
   { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', api: 'xkiro', tag: 'xkiro · 1M · سريع', ctx: 1048576 },
@@ -26,12 +30,12 @@ const MODELS = [
   { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek Chat V3.1', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
   { id: 'mistralai/codestral-2508', name: 'Codestral 2508', api: 'xkiro', tag: 'xkiro · coder · 262k', ctx: 262144 },
   { id: 'mistralai/devstral-medium', name: 'Devstral 2', api: 'xkiro', tag: 'xkiro · coder · 262k', ctx: 262144 },
-  { id: 'mistralai/mistral-large-2512', name: 'Mistral Large', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/mistral-large-2512', name: 'Mistral Large', api: 'xkiro', tag: 'xkiro · 262k · 🖼', ctx: 262144, vision: true },
   { id: 'mistralai/mistral-medium-3.5', name: 'Mistral Medium', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
-  { id: 'mistralai/mistral-small-2603', name: 'Mistral Small', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
-  { id: 'mistralai/ministral-3b', name: 'Ministral 3B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
-  { id: 'mistralai/ministral-8b', name: 'Ministral 8B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
-  { id: 'mistralai/ministral-14b', name: 'Ministral 14B', api: 'xkiro', tag: 'xkiro · 262k', ctx: 262144 },
+  { id: 'mistralai/mistral-small-2603', name: 'Mistral Small', api: 'xkiro', tag: 'xkiro · 262k · 🖼', ctx: 262144, vision: true },
+  { id: 'mistralai/ministral-3b', name: 'Ministral 3B', api: 'xkiro', tag: 'xkiro · 262k · 🖼', ctx: 262144, vision: true },
+  { id: 'mistralai/ministral-8b', name: 'Ministral 8B', api: 'xkiro', tag: 'xkiro · 262k · 🖼', ctx: 262144, vision: true },
+  { id: 'mistralai/ministral-14b', name: 'Ministral 14B', api: 'xkiro', tag: 'xkiro · 262k · 🖼', ctx: 262144, vision: true },
   { id: 'minimax/minimax-m2', name: 'MiniMax M2', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
   { id: 'minimax/minimax-m2.1', name: 'MiniMax M2.1', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
   { id: 'minimax/minimax-m2.5', name: 'MiniMax M2.5', api: 'xkiro', tag: 'xkiro · 1M', ctx: 1048576 },
@@ -46,6 +50,7 @@ const MODELS = [
   { id: 'ling-3.0-flash-fin-free', name: 'Ling 3.0 Flash Fin', api: 'oc', tag: 'oc free · 262k', ctx: 262144 },
   { id: 'big-pickle', name: 'Big Pickle', api: 'oc', tag: 'oc free · 200k', ctx: 200000 },
   { id: 'mimo-v2.5-free', name: 'MiMo V2.5', api: 'oc', tag: 'oc free · 200k', ctx: 200000 },
+  { id: 'z-ai/glm-5.3-free', name: 'GLM 5.3 Free', api: 'tr', tag: 'tokenrouter · free · 128k', ctx: 131072 },
 ];
 let MODEL = process.env.MODEL || (MODELS.some((m) => m.id === cfg.model) ? cfg.model : '') || MODELS[1].id;
 const setModel = (m) => { if (MODELS.some((x) => x.id === m)) MODEL = m; };
@@ -54,8 +59,13 @@ const getModel = () => MODEL;
 const setApiBase = (u) => { if (typeof u === 'string' && u.trim()) API_BASE = u.trim().replace(/\/+$/, ''); };
 const getApiBase = () => API_BASE;
 /* per-model API routing — xkiro models use API_BASE/API_KEY (config),
-   opencode zen models (api:'oc') use the free zen gateway + opencode key */
+   opencode zen models (api:'oc') use the free zen gateway + opencode key,
+   tokenrouter models (api:'tr') use tokenrouter API */
 const ZEN_V1 = 'https://opencode.ai/zen/v1';
+const TR_BASE = 'https://api.tokenrouter.com/v1';
+let TR_KEY = (process.env.TOKENROUTER_API_KEY || cfg.tokenrouterApiKey || '').trim();
+const setTrApiKey = (k) => { TR_KEY = String(k || '').trim(); };
+const getTrApiKey = () => (TR_KEY ? TR_KEY.slice(0, 4) + '…' + TR_KEY.slice(-4) : '');
 const ocOpenKey = () => {
   try {
     const { opencodeKey } = require('./terminal/opencode');
@@ -70,6 +80,7 @@ const apiOf = (mid) => {
 };
 const endpointOf = (mid) => {
   if (apiOf(mid) === 'oc') return { base: ZEN_V1, key: ocOpenKey() };
+  if (apiOf(mid) === 'tr') return { base: TR_BASE, key: TR_KEY };
   return { base: API_BASE, key: API_KEY };
 };
 /* hot-swap the model catalog in place (same array reference, so every
@@ -204,6 +215,197 @@ const tools = {
     return out.slice(0, 6000) || '(command ran with no output)';
   },
 
+  /* view_image — OCR + image description in one tool.
+     Accepts an image path (jpg/png/gif/webp/bmp/tiff).
+     1) Runs tesseract OCR to extract any visible text.
+     2) If the current model supports vision, sends the image to the
+        vision model API for a visual description.
+     3) Falls back to OCR-only if no vision model is available.
+     Returns combined OCR text + visual description. */
+  async view_image(args) {
+    const imgPath = path.resolve(WORKDIR, args.path || '');
+    if (!imgPath) return 'ERROR: view_image requires a "path" to an image file.';
+    try {
+      const stat = await fsp.stat(imgPath);
+      if (!stat.isFile()) return `ERROR: ${imgPath} is not a file.`;
+    } catch (e) {
+      return `ERROR: cannot read ${imgPath} — ${e.code === 'ENOENT' ? 'file not found' : e.message}`;
+    }
+    const ext = path.extname(imgPath).toLowerCase();
+    const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ppm', '.pbm', '.pgm'];
+    if (!IMAGE_EXTS.includes(ext)) return `ERROR: ${ext} is not a supported image format. Supported: ${IMAGE_EXTS.join(', ')}`;
+
+    const parts = [];
+
+    /* ── Part 1: Tesseract OCR ── */
+    try {
+      const ocrLang = args.lang || 'ara+eng';
+      const { stdout: ocrText } = await execAsync(
+        `tesseract "${imgPath}" stdout -l ${ocrLang} --psm 6 2>/dev/null`,
+        { timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+      );
+      const text = ocrText.trim();
+      if (text) parts.push(`📝 OCR Text (${ocrLang}):\n${text}`);
+    } catch (e) {
+      parts.push(`⚠️ OCR failed: ${e.message}`);
+    }
+
+    /* ── Part 2: Vision model description ── */
+    try {
+      const visionModel = MODELS.find((m) => m.vision && m.id !== MODEL);
+      const currentModel = MODELS.find((m) => m.id === MODEL);
+      const useModel = (currentModel && currentModel.vision) ? currentModel : visionModel;
+      if (useModel) {
+        const ep = endpointOf(useModel.id);
+        if (ep && ep.key) {
+          const imgBuf = await fsp.readFile(imgPath);
+          const b64 = imgBuf.toString('base64');
+          const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.tiff': 'image/tiff' }[ext] || 'image/jpeg';
+          const prompt = args.prompt || 'Describe this image in detail. If it contains text, list all visible text. If it contains code, list the code. If it contains UI elements, describe the layout.';
+          const resp = await fetch(`${ep.base}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ep.key}` },
+            body: JSON.stringify({
+              model: useModel.id,
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt },
+                  { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+                ],
+              }],
+              max_tokens: 4096,
+              temperature: 0.3,
+            }),
+            signal: AbortSignal.timeout(60000),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const desc = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+            if (desc.trim()) parts.push(`👁️ Vision (${useModel.name}):\n${desc.trim()}`);
+          } else {
+            const errText = await resp.text().catch(() => '');
+            parts.push(`⚠️ Vision API error ${resp.status}: ${errText.slice(0, 200)}`);
+          }
+        } else {
+          parts.push(`⚠️ No API key for vision model "${useModel.name}" — OCR only.`);
+        }
+      } else {
+        parts.push('ℹ️ No vision model available — OCR only.');
+      }
+    } catch (e) {
+      parts.push(`⚠️ Vision error: ${e.message}`);
+    }
+
+    if (!parts.length) return `Image: ${imgPath}\n(no text found and no vision description available)`;
+    return `Image: ${imgPath} (${(stat.size / 1024).toFixed(1)} KB, ${ext}):\n\n${parts.join('\n\n')}`;
+  },
+
+  /* search the web — no key needed (DuckDuckGo html endpoint). Returns
+     rank-ordered results: title, url, snippet. Use for general-knowledge
+     questions, up-to-date facts, and research the model doesn't know. */
+  async web_search(args) {
+    const q = String(args.query || args.q || '').trim().slice(0, 200);
+    if (!q) return 'ERROR: web_search needs a "query".';
+    const days = Number(args.max_age_days) > 0 ? ` days:${Math.max(1, Number(args.max_age_days))}` : '';
+    const url = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q + days) + '&kl=wt-wt&kp=-2';
+    let resp;
+    try {
+      resp = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36' },
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (e) {
+      return 'ERROR: web search failed — ' + (e && e.message || e);
+    }
+    if (!resp.ok) return 'ERROR: web search returned HTTP ' + resp.status;
+    const html = await resp.text().catch(() => '');
+    /* parse DuckDuckGo result blocks */
+    const results = [];
+    const re = /<div class="result[^>]*">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/g;
+    let m;
+    while ((m = re.exec(html)) && results.length < 8) {
+      const block = m[1];
+      const t = /<a[^>]*class="result__a"[^>]*>(.*?)<\/a>/.exec(block);
+      const u = /<a[^>]*class="result__a"[^>]*href="([^"]+)"/.exec(block);
+      const s = /<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/.exec(block) || /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+      if (!t) continue;
+      const title = stripTags(t[1]).replace(/\s+/g, ' ').trim();
+      let href = u ? u[1] : '';
+      /* DDG redirect links carry the real url in the uddg parameter */
+      const uddg = /[?&]uddg=([^&]+)/.exec(href);
+      if (uddg) { try { href = decodeURIComponent(uddg[1]); } catch {} }
+      const snip = s ? stripTags(s[1]).replace(/\s+/g, ' ').trim() : '';
+      if (title) results.push({ title, url: href.replace(/^\/\//, 'https://'), snippet: snip.slice(0, 300) });
+    }
+    /* fallback: naive generic parsing if the class-based regex missed (HTML variant) */
+    if (!results.length) {
+      const re2 = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*rel="nofollow"[^>]*>(.*?)<\/a>/g;
+      while ((m = re2.exec(html)) && results.length < 6) {
+        results.push({ title: stripTags(m[2]).replace(/\s+/g, ' ').trim().slice(0, 120), url: m[1], snippet: '' });
+      }
+    }
+    if (!results.length) return `بحث عن: ${q}\n(no results — maybe offline or blocked. Try a simpler/clearer query.)`;
+    return 'بحث: ' + q + '\n\n' + results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n');
+  },
+
+  /* fetch and read the text of any web page — no key needed. Returns plain
+     text (tags stripped, scripts/ads removed) so the model can read articles,
+     docs, or any URL it got from web_search or the user. */
+  async web_fetch(args) {
+    const raw = String(args.url || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return 'ERROR: web_fetch needs a valid http(s) url.';
+    if (/^https?:\/\/(localhost|127\.)/i.test(raw)) return 'ERROR: localhost is not allowed.';
+    let resp;
+    try {
+      resp = await fetch(raw, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,text/plain,*/*;q=0.8',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch (e) {
+      return 'ERROR: web_fetch failed — ' + (e && e.message || e);
+    }
+    if (!resp.ok) return 'ERROR: web_fetch returned HTTP ' + resp.status;
+    const ctype = String(resp.headers.get('content-type') || '');
+    const size = Number(resp.headers.get('content-length') || 0);
+    if (size > 10 * 1024 * 1024) return 'ERROR: page too large (' + (size / 1048576).toFixed(1) + ' MB)';
+    const body = await resp.arrayBuffer().catch(() => null);
+    if (!body) return 'ERROR: could not read the page body.';
+    let text;
+    const bytes = Buffer.from(body);
+    if (!ctype.includes('text/html') && !ctype.includes('html')) {
+      /* plain text / json / xml — return directly (bounded) */
+      text = bytes.toString('utf8');
+      return 'URL: ' + raw + '  [' + ctype.split(';')[0] + ']\n\n' + text.replace(/[ \t]+/g, ' ').slice(0, 8000);
+    }
+    text = bytes.toString('utf8');
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text);
+    const titleTxt = title ? stripTags(title[1]).replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+    /* remove script/style/nav/footer/header completely, then strip tags */
+    text = text
+      .replace(/<(script|style|noscript|svg|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+      .replace(/<nav\b[^>]*>[\s\S]*?<\/nav\s*>/gi, ' ')
+      .replace(/<footer\b[^>]*>[\s\S]*?<\/footer\s*>/gi, ' ')
+      .replace(/<header\b[^>]*>[\s\S]*?<\/header\s*>/gi, ' ');
+    const clean = stripTags(text)
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\r/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, 9000);
+    return (titleTxt ? 'TITLE: ' + titleTxt + '\n' : '') + 'URL: ' + raw + '\n\n' + clean || '(page had no readable text)';
+  },
+
   /* ask the user for a decision — blocks the loop until the CLI replies.
      options: array of { label, value } or plain strings. */
   async ask_question(args) {
@@ -231,6 +433,13 @@ const tools = {
 };
 
 /* ── structured file diff (green additions / red removals), like opencode ── */
+function stripTags(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z]+;/gi, (e) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' })[e.toLowerCase()] || e)
+    .replace(/\s+/g, ' ');
+}
+
 function makeFileDiff(filePath, oldText, newText) {
   const o = String(oldText || '').split(/\r?\n/);
   const n = String(newText || '').split(/\r?\n/);
@@ -378,6 +587,51 @@ const toolDefinitions = [
   {
     type: 'function',
     function: {
+      name: 'web_search',
+      description: 'Search the web (no API key needed). Returns ranked results with title, url and snippet. Use it for general-knowledge questions, recent/up-to-date facts, prices, news, docs that changed — anything you do not know or that may be outdated.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query — short, in the user\'s language' },
+          max_age_days: { type: 'integer', description: 'Optional: only results published within the last N days (for news/recent topics)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch and read the full text of a web page (titles, articles, docs, API pages). Returns cleaned plain text. Use it to actually read the pages found by web_search, or any url the user gives you.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Full http(s) url to read' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'view_image',
+      description: 'View/describe an image file. Uses tesseract OCR to extract text AND (if available) a vision model to describe the visual content. Supports jpg, png, gif, webp, bmp, tiff. Use this whenever the user asks you to look at, describe, or read an image — or when you encounter an image file that is relevant to the task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path to the image file (relative to /home or absolute)' },
+          lang: { type: 'string', description: 'OCR languages (default: "ara+eng"). Examples: "eng", "ara+eng", "fra+eng"' },
+          prompt: { type: 'string', description: 'Custom prompt for the vision model (default: describe the image in detail)' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'todo_update',
       description: 'Maintain a checkbox task list the user watches live. Register EVERY planned step with status "pending", then mark each "completed" as you finish it. Stays visible across the session.',
       parameters: {
@@ -395,7 +649,7 @@ const toolDefinitions = [
     type: 'function',
     function: {
       name: 'ask_question',
-      description: 'Ask the user a short question with interactive answer options, shown as a picker on their screen. Use it ONLY when you are genuinely blocked or the request is ambiguous and a single wrong guess would waste a lot of effort. Keeps working while you wait — the chosen answer comes back to you and you continue. If the user dismisses it, proceed on your own judgment.',
+      description: 'Ask the user a short question with interactive answer options, shown as a picker on their screen. Use it FREELY — not just when blocked: use it automatically (a) whenever the request is ambiguous and a wrong guess would waste effort, (b) when the user asks for suggestions/options/proposals/preferences (e.g. "اقترح لي", "خيّرني", "give me options", "شو تطبيقنا"), or (c) when a choice meaningfully changes what you build (scope, platform, design, language). Present your recommended options as answer choices. A good question saves a wasted round — prefer asking briefly over guessing on high-risk choices. Keeps working while you wait — the chosen answer comes back to you and you continue. If the user dismisses it, proceed on your own judgment.',
       parameters: {
         type: 'object',
         properties: {
@@ -449,16 +703,40 @@ const promptPath = () => {
 };
 const reloadPrompt = () => {
   const p = promptPath();
+  let created = false;
   try {
-    const t = fs.readFileSync(p, 'utf8').trim();
-    if (t) { SYSTEM_PROMPT = t; return { ok: true, path: p, length: Buffer.byteLength(t, 'utf8'), mode: 'custom' }; }
-    return { ok: true, path: p, length: 0, mode: 'default' };
+    let t;
+    try {
+      t = fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT') {
+        // الملف غير موجود → ننشئه تلقائياً بنظام NEO الافتراضي حتى يتسنّى
+        // للمستخدم تعديله ووضع برومت خاص به (يُقرأ من هنا في كل تشغيل).
+        fs.writeFileSync(p, 'أنت NEO — اكتب هنا برومتك الكامل الذي تريد أن يلتزم به الذكاء الاصطناعي.\n\n' + SYSTEM_PROMPT + '\n');
+        created = true;
+        t = fs.readFileSync(p, 'utf8');
+      } else { throw e; }
+    }
+    const tt = t.trim();
+    if (tt) {
+      const isDefault = created || tt === SYSTEM_PROMPT;
+      SYSTEM_PROMPT = tt;
+      return { ok: true, path: p, length: Buffer.byteLength(tt, 'utf8'), mode: isDefault ? 'default' : 'custom', created };
+    }
+    return { ok: true, path: p, length: 0, mode: 'default', created };
   } catch (e) {
-    return { ok: false, path: p, reason: e.code === 'ENOENT' ? 'missing' : e.message };
+    return { ok: false, path: p, reason: e.code === 'ENOENT' ? 'missing' : e.message, created };
   }
 };
 
-let SYSTEM_PROMPT = `You are NEO, a precise senior software engineer and coding agent. You run ON the user's machine with FULL permissions — that is normal and expected: you are a working tool, not a discussion bot.
+let SYSTEM_PROMPT = `You are NEO, a precise, senior-level AI assistant and coding agent. You can do BOTH kinds of work and you should do whatever the user actually asked for:
+
+- CODE tasks: build/modify/run software on the user's machine.
+- KNOWLEDGE tasks: answer questions, explain, compare, summarize, translate, research — using web_search/web_fetch when the answer is up-to-date, external, or uncertain.
+- FILES tasks: organize, merge, rename, convert, inspect data on the user's files.
+Do not assume every request is "build a website" — read what the user actually wants and do exactly that.
+
+You run ON the user's machine with FULL permissions — that is normal and expected: you are a working tool, not a mere discussion bot.
 
 ${sysPromptFacts()}
 
@@ -470,31 +748,45 @@ AVAILABLE TOOLSET — use freely:
 5. glob(pattern, path) — find files by name pattern
 6. grep(pattern, path) — search text inside file contents
 7. bash(command, cwd) — run ANY shell command (git, node, python3, npm, pkg, ls, cat, mkdir, cp, curl, etc). Use it to build, run, test, install, move files, anything. Default cwd = the working root.
+8. web_search(query, max_age_days) — search the web for up-to-date facts, news, prices, docs (no key needed)
+9. web_fetch(url) — read the full text of any web page (articles, docs, pages from web_search)
+10. view_image(path, lang, prompt) — view/describe images: runs tesseract OCR (ara+eng) to extract text, and if a vision model is available, sends the image for visual description. Use this whenever the user asks you to look at, describe, or read an image file.
+11. ask_question(question, options) — ask the user a picker question when a wrong guess would waste real effort
+
+DECISION RULES (how to pick the right tools):
+- Knowledge the model may not have, or that changes over time (news, versions, prices, APIs, events) → web_search first, then web_fetch the best 1-3 results to read them for real before answering.
+- The user pastes/mentions a website or wants current facts → web_fetch that exact url.
+- To know what's on disk → list_dir/read_file/glob/grep.
+- To run/verify/build → bash.
+- Images, screenshots, photos, diagrams, or any picture file → view_image(path) to OCR + describe it.
 
 GROUND RULES:
 - Resolve relative paths from the working root; absolute paths anywhere are allowed.
 - Work with FILE TOOLS and bash for real output. Never claim something exists or works without CHECKING it with a real command.
 - When writing code: CREATE the actual files (not narration about them), then RUN them to verify (node file.js / python3 … / npm test / ./script), fix whatever fails, re-run until green.
 - For big projects build structure first (folders + file list), then write files one by one. Never inline whole big files into chat.
-- In chat keep the reply SHORT and humanized: what you did, the file list, how to run, what you verified. Use markdown (headings, code fences, bullets).
+- For knowledge questions: answer directly in a clear, organized way — cite what you actually read (titles/urls) when you used the web, and don't pad.
+- In chat keep the reply SHORT and humanized: for code — what you did, the file list, how to run, what you verified; for answers — the answer up front, then the reasoning. Use markdown (headings, code fences, bullets). Long walls of text are a failure.
 - Match the user's language: Arabic → reply in clean Arabic (فصحى, not slang). English → English.
 - Never fabricate results. Every claim = something you actually observed in a tool result.
 
 WORK CYCLE (a strict routine that keeps you accurate):
-1. UNDERSTAND — read the request twice; find the real goal, the constraints, and the deliverable. If a wrong guess would waste a lot of effort and the point is genuinely ambiguous, call ask_question with 2-6 options — never guess blindly; proceed without asking when a reasonable interpretation exists.
-2. EXPLORE ONLY AS NEEDED — list_dir/read/glob/grep once to map the relevant area, then stop. Don't wander, don't re-read files already in context, don't run duplicate commands.
-3. THINK BEFORE ACT — name the change, the risks, and the edge cases. Prefer the smallest change that works.
+1. UNDERSTAND — read the request twice; identify the real goal, the constraints, and the deliverable. If a wrong guess would waste a lot of effort and the point is genuinely ambiguous, call ask_question with 2-6 options — never guess blindly; proceed without asking when a reasonable interpretation exists.
+   ASK AUTOMATICALLY when: the user asks for suggestions/options/alternatives/proposals/preferences (e.g. "اقترح لي فكرة", "خيّرني", "give me options", "اقترح عليا") — always respond with an interactive ask_question picker offering your ideas/options as choices instead of a flat text list; or when the request has an open scope and your pick (platform, language, app idea, design) would determine the whole result.
+2. EXPLORE / GATHER ONLY AS NEEDED — map the relevant area once (list_dir/read/glob/grep OR web_search/web_fetch), then stop. Don't wander, don't re-read files already in context, don't run duplicate commands, don't fetch more pages than you need.
+3. THINK BEFORE ACT — name the change, the risks, the edge cases. Prefer the smallest change that works.
 4. DO IT STEP BY STEP — track progress with todo_update (register each planned step pending, flip to completed when actually done).
-5. VERIFY for real — run the build/test/syntax check after every meaningful change; read errors fully and fix the actual cause.
-6. REVIEW & REPAIR — act as your own reviewer: re-read what you wrote for bugs before declaring done; fix without drama.
-7. REPORT honestly — a compact final message with results, files, run commands, and anything unverified.
+5. VERIFY for real — run the build/test/syntax check after every meaningful change (or confirm a web/answer claim by re-reading your fetched text); read errors fully and fix the actual cause.
+6. REVIEW & REPAIR — instantly re-read what you wrote for bugs/mistakes before declaring done; fix without drama.
+7. REPORT honestly — a compact final message: for code = results + files + run commands; for answers = the answer + (if from web) the sources. State anything unverified.
 
 TRAPS TO AVOID (the classic ways agents get confused):
 - Do not repeat a failing command hoping it will pass — read the error, adjust, retry.
 - Do not dump code you can simply write to a file.
 - Do not describe plans as if you performed them — perform them.
-- Do not invent file paths or content; verify with tools.
+- Do not invent file paths, content, or facts — verify with tools.
 - Do not over-engineer or keep reading forever — act when you have enough.
+- Do not answer current/up-to-date questions from memory — search the web.
 - If a tool returns an error, the error text IS the input for your next action.
 
 You work autonomously end-to-end, verify everything real, then report.`;
@@ -504,7 +796,7 @@ const PLAN_INSTRUCTION = `
 CURRENT SETTING: PLAN MODE ONLY.
 You must PLAN, never execute:
 - write_file, edit_file and bash are LOCKED here and not available to you.
-- Explore ONLY with the read-only tools (list_dir, read_file, glob, grep).
+- Explore ONLY with read-only tools (list_dir, read_file, glob, grep) and web research (web_search, web_fetch) if the plan needs up-to-date facts.
 - Analyze the task and produce a clear, numbered plan of concrete steps.
 - Register EVERY planned step with todo_update (status="pending").
 - End your reply with exactly: 'خطتي جاهزة — حوّلني إلى وضع Build لتنفيذها' (Plan ready — switch me to Build).
@@ -871,4 +1163,4 @@ async function runAgent(clientMessages, emit, opts = {}) {
   }
 }
 
-module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles, swapModels, resetModels, NEO_DEFAULT_MODELS, answerQuestion, cancelAllQuestions, isQuestionPending: () => pendingQuestions.size > 0 };
+module.exports = { MODEL, MODELS, API_BASE, API_KEY, MAX_CONTEXT, WORKDIR, tools, toolDefinitions, SYSTEM_PROMPT, promptPath, reloadPrompt, PLAN_INSTRUCTION, callModel, runAgent, runCompact, executeTool, makeFileDiff, setMode, getMode, getTodos, WRITE_TOOLS, setApiKey, getApiKey, setModel, getModel, setModelRaw, setApiBase, getApiBase, modelCtxLimit, getFiles, swapModels, resetModels, NEO_DEFAULT_MODELS, answerQuestion, cancelAllQuestions, isQuestionPending: () => pendingQuestions.size > 0, setTrApiKey, getTrApiKey };
